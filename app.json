@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "SolanaPe",
+    "slug": "solanape",
+    "scheme": "solanape",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0D0D12"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "SolanaPe needs camera access to scan Solana payment QR codes."
+      },
+      "bundleIdentifier": "com.deba.solanape"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0D0D12"
+      },
+      "package": "com.deba.solanape",
+      "edgeToEdgeEnabled": true,
+      "navigationBar": {
+        "style": "dark-content",
+        "backgroundColor": "#0D0D12"
+      },
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-dev-client",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "SolanaPe needs camera access to scan Solana payment QR codes."
+        }
+      ],
+      [
+        "expo-navigation-bar",
+        {
+          "position": "absolute",
+          "style": "dark"
+        }
+      ]
+      
+    ]
+  }
+}
