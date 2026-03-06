@@ -1,198 +1,212 @@
-import { View, Text, FlatList, StyleSheet, TouchableOpacity } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import Animated, { FadeInDown, useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
+import { useWalletStore, Transaction } from '../../../src/stores/wallet-store';
+import { Colors, Spacing, Radius } from '../../constants/theme';
+import { shortenAddress, timeAgo, getTxExplorerUrl } from '../../utils/solana';
 
-const C = {
-  bg: '#0D0D12',
-  card: '#1A1A24',
-  purple: '#7C3AED',
-  green: '#14F195',
-  border: 'rgba(124,58,237,0.25)',
-  text: '#FFFFFF',
-  sub: '#AAAAAA',
-  muted: '#555555',
-};
+type Filter = 'all' | 'sent' | 'received' | 'SOL' | 'SKR';
 
-const TX = [
-  { id: '1', type: 'sent',     name: 'Alex',      addr: '7xKp...3mNq', amount: '0.05', time: '2 min ago'  },
-  { id: '2', type: 'received', name: 'Luna',       addr: '9pRt...7wXz', amount: '0.10', time: '1 hr ago'   },
-  { id: '3', type: 'sent',     name: 'CoffeeShop', addr: '3jMn...5kLp', amount: '0.02', time: '3 hrs ago'  },
-  { id: '4', type: 'received', name: 'Felix',      addr: '2bQs...8nVw', amount: '0.25', time: 'Yesterday'  },
-  { id: '5', type: 'sent',     name: 'Sarah',      addr: '6fHg...1eDr', amount: '0.01', time: 'Yesterday'  },
-  { id: '6', type: 'sent',     name: 'Vendor QR',  addr: '4cTu...9oYa', amount: '0.08', time: '2 days ago' },
-];
-
-const totalSent = TX
-  .filter(t => t.type === 'sent')
-  .reduce((sum, t) => sum + parseFloat(t.amount), 0)
-  .toFixed(2);
-
-const totalReceived = TX
-  .filter(t => t.type === 'received')
-  .reduce((sum, t) => sum + parseFloat(t.amount), 0)
-  .toFixed(2);
-
-export default function History() {
+function FilterChip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  const scale = useSharedValue(1);
+  const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
   return (
-    <SafeAreaView style={s.safe}>
-      <View style={s.header}>
-        <Text style={s.title}>Transaction History</Text>
-      </View>
-
-      {/* Summary cards */}
-      <View style={s.summaryRow}>
-        <View style={s.summaryCard}>
-          <View style={s.summaryIconRow}>
-            <View style={[s.summaryIcon, { backgroundColor: 'rgba(124,58,237,0.15)' }]}>
-              <Ionicons name="arrow-up-outline" size={16} color={C.purple} />
-            </View>
-            <Text style={s.summaryLabel}>Total Sent</Text>
-          </View>
-          <Text style={[s.summaryValue, { color: C.purple }]}>{totalSent} SOL</Text>
-        </View>
-        <View style={s.summaryCard}>
-          <View style={s.summaryIconRow}>
-            <View style={[s.summaryIcon, { backgroundColor: 'rgba(20,241,149,0.15)' }]}>
-              <Ionicons name="arrow-down-outline" size={16} color={C.green} />
-            </View>
-            <Text style={s.summaryLabel}>Total Received</Text>
-          </View>
-          <Text style={[s.summaryValue, { color: C.green }]}>{totalReceived} SOL</Text>
-        </View>
-      </View>
-
-      <FlatList
-        data={TX}
-        keyExtractor={(item) => item.id}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 100 }}
-        renderItem={({ item }) => (
-          <TouchableOpacity style={s.txRow} activeOpacity={0.7}>
-            <View style={[s.txIcon, {
-              backgroundColor: item.type === 'sent'
-                ? 'rgba(124,58,237,0.15)'
-                : 'rgba(20,241,149,0.15)',
-            }]}>
-              <Ionicons
-                name={item.type === 'sent' ? 'arrow-up-outline' : 'arrow-down-outline'}
-                size={22}
-                color={item.type === 'sent' ? C.purple : C.green}
-              />
-            </View>
-            <View style={s.txInfo}>
-              <Text style={s.txName}>{item.name}</Text>
-              <Text style={s.txAddr}>{item.addr}</Text>
-              <Text style={s.txTime}>{item.time}</Text>
-            </View>
-            <View style={s.txRight}>
-              <Text style={[s.txAmount, { color: item.type === 'sent' ? C.sub : C.green }]}>
-                {item.type === 'sent' ? '-' : '+'}{item.amount}
-              </Text>
-              <Text style={s.txSOL}>SOL</Text>
-            </View>
-          </TouchableOpacity>
-        )}
-      />
-    </SafeAreaView>
+    <TouchableOpacity
+      onPress={() => {
+        scale.value = withSpring(0.93, {}, () => { scale.value = withSpring(1); });
+        onPress();
+      }}
+      activeOpacity={0.8}
+    >
+      <Animated.View style={[styles.filterChip, active && styles.filterChipActive, animStyle]}>
+        <Text style={[styles.filterText, active && styles.filterTextActive]}>{label}</Text>
+      </Animated.View>
+    </TouchableOpacity>
   );
 }
 
-const s = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: C.bg,
+function TxCard({ tx, index }: { tx: Transaction; index: number }) {
+  const isSent = tx.type === 'sent';
+  const isSKR = tx.token === 'SKR';
+  const statusColor = tx.status === 'confirmed' ? Colors.green : tx.status === 'failed' ? Colors.error : Colors.warning;
+  const amountColor = isSent ? Colors.error : Colors.green;
+
+  return (
+    <Animated.View entering={FadeInDown.delay(index * 40).duration(280)}>
+      <TouchableOpacity
+        style={styles.txCard}
+        onPress={() => tx.txSignature && Linking.openURL(getTxExplorerUrl(tx.txSignature))}
+        activeOpacity={0.8}
+      >
+        {/* Icon */}
+        <View style={[styles.txIcon, { backgroundColor: isSent ? 'rgba(255,77,109,0.12)' : 'rgba(20,241,149,0.12)' }]}>
+          <Text style={{ fontSize: 20, color: amountColor }}>{isSent ? '↑' : '↓'}</Text>
+        </View>
+
+        {/* Info */}
+        <View style={styles.txInfo}>
+          <View style={styles.txTopRow}>
+            <Text style={styles.txLabel} numberOfLines={1}>
+              {tx.label || shortenAddress(tx.address)}
+            </Text>
+            <Text style={[styles.txAmount, { color: amountColor }]}>
+              {isSent ? '-' : '+'}{tx.amount} {tx.token}
+            </Text>
+          </View>
+          <View style={styles.txBottomRow}>
+            <Text style={styles.txTime}>{timeAgo(tx.timestamp)}</Text>
+            <View style={[styles.statusBadge, { backgroundColor: `${statusColor}15` }]}>
+              <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
+              <Text style={[styles.statusText, { color: statusColor }]}>{tx.status}</Text>
+            </View>
+          </View>
+          {isSKR && (
+            <View style={styles.skrTag}>
+              <Text style={styles.skrTagText}>🔮 Seeker Token</Text>
+            </View>
+          )}
+        </View>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+}
+
+export default function HistoryScreen() {
+  const { transactions } = useWalletStore();
+  const [filter, setFilter] = useState<Filter>('all');
+
+  const filtered = transactions.filter(tx => {
+    if (filter === 'all') return true;
+    if (filter === 'sent') return tx.type === 'sent';
+    if (filter === 'received') return tx.type === 'received';
+    if (filter === 'SOL') return tx.token === 'SOL';
+    if (filter === 'SKR') return tx.token === 'SKR';
+    return true;
+  });
+
+  const totalSent = transactions.filter(t => t.type === 'sent' && t.status === 'confirmed')
+    .reduce((s, t) => s + parseFloat(t.amount), 0);
+  const totalReceived = transactions.filter(t => t.type === 'received' && t.status === 'confirmed')
+    .reduce((s, t) => s + parseFloat(t.amount), 0);
+
+  return (
+    <View style={styles.container}>
+      <SafeAreaView style={{ flex: 1 }} edges={['top']}>
+        {/* Header */}
+        <Animated.View entering={FadeInDown.duration(300)} style={styles.header}>
+          <Text style={styles.title}>History</Text>
+          <Text style={styles.sub}>All your transactions</Text>
+        </Animated.View>
+
+        {/* Stats row */}
+        <Animated.View entering={FadeInDown.delay(100).duration(300)} style={styles.statsRow}>
+          <View style={styles.statCard}>
+            <Text style={styles.statLabel}>Total Sent</Text>
+            <Text style={[styles.statValue, { color: Colors.error }]}>{totalSent.toFixed(4)}</Text>
+          </View>
+          <View style={[styles.statCard, { borderColor: Colors.greenBorder }]}>
+            <Text style={styles.statLabel}>Total Received</Text>
+            <Text style={[styles.statValue, { color: Colors.green }]}>{totalReceived.toFixed(4)}</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statLabel}>Transactions</Text>
+            <Text style={[styles.statValue, { color: Colors.textPrimary }]}>{transactions.length}</Text>
+          </View>
+        </Animated.View>
+
+        {/* Filters */}
+        <Animated.View entering={FadeInDown.delay(150).duration(300)}>
+          <View style={styles.filters}>
+            {(['all', 'sent', 'received', 'SOL', 'SKR'] as Filter[]).map(f => (
+              <FilterChip key={f} label={f === 'all' ? 'All' : f} active={filter === f} onPress={() => setFilter(f)} />
+            ))}
+          </View>
+        </Animated.View>
+
+        <FlatList
+          data={filtered}
+          keyExtractor={tx => tx.id}
+          renderItem={({ item, index }) => <TxCard tx={item} index={index} />}
+          contentContainerStyle={styles.list}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <View style={styles.empty}>
+              <Text style={styles.emptyEmoji}>📋</Text>
+              <Text style={styles.emptyText}>No transactions</Text>
+              <Text style={styles.emptySub}>Your transaction history will appear here</Text>
+            </View>
+          }
+        />
+      </SafeAreaView>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: Colors.bg },
+  header: { paddingHorizontal: Spacing.screen, paddingTop: 12, paddingBottom: 12 },
+  title: { fontSize: 26, fontWeight: '800', color: Colors.textPrimary },
+  sub: { fontSize: 13, color: Colors.textSecondary, marginTop: 2 },
+
+  statsRow: {
+    flexDirection: 'row', gap: 8,
+    paddingHorizontal: Spacing.screen, marginBottom: 16,
   },
-  header: {
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 16,
+  statCard: {
+    flex: 1, backgroundColor: Colors.bgCard,
+    borderRadius: Radius.lg, padding: 12,
+    borderWidth: 1, borderColor: Colors.border,
+    alignItems: 'center',
   },
-  title: {
-    color: C.text,
-    fontSize: 24,
-    fontWeight: 'bold',
+  statLabel: { fontSize: 10, color: Colors.textMuted, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 4 },
+  statValue: { fontSize: 16, fontWeight: '800' },
+
+  filters: {
+    flexDirection: 'row', gap: 8, paddingHorizontal: Spacing.screen,
+    marginBottom: 12, flexWrap: 'wrap',
   },
-  summaryRow: {
-    flexDirection: 'row',
+  filterChip: {
+    paddingHorizontal: 14, paddingVertical: 7,
+    borderRadius: Radius.full, backgroundColor: Colors.bgCard,
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  filterChipActive: { backgroundColor: Colors.greenDim, borderColor: Colors.greenBorder },
+  filterText: { fontSize: 13, color: Colors.textSecondary, fontWeight: '600', textTransform: 'capitalize' },
+  filterTextActive: { color: Colors.green },
+
+  list: { paddingHorizontal: Spacing.screen, paddingBottom: 100 },
+
+  txCard: {
+    flexDirection: 'row', alignItems: 'flex-start',
+    paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: Colors.border,
     gap: 12,
-    paddingHorizontal: 20,
-    marginBottom: 20,
-  },
-  summaryCard: {
-    flex: 1,
-    backgroundColor: C.card,
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: C.border,
-    gap: 8,
-  },
-  summaryIconRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  summaryIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  summaryLabel: {
-    color: C.sub,
-    fontSize: 12,
-  },
-  summaryValue: {
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  txRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: C.card,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: C.border,
-    gap: 14,
   },
   txIcon: {
-    width: 46,
-    height: 46,
-    borderRadius: 14,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  txInfo: {
-    flex: 1,
-    gap: 3,
-  },
-  txName: {
-    color: C.text,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  txAddr: {
-    color: C.muted,
-    fontSize: 12,
-    fontFamily: 'monospace',
-  },
-  txTime: {
-    color: C.muted,
-    fontSize: 11,
-  },
-  txRight: {
-    alignItems: 'flex-end',
-  },
-  txAmount: {
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  txSOL: {
-    color: C.muted,
-    fontSize: 11,
+    width: 46, height: 46, borderRadius: 23,
+    alignItems: 'center', justifyContent: 'center',
     marginTop: 2,
   },
+  txInfo: { flex: 1 },
+  txTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  txLabel: { fontSize: 15, fontWeight: '700', color: Colors.textPrimary, flex: 1 },
+  txAmount: { fontSize: 15, fontWeight: '700' },
+  txBottomRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  txTime: { fontSize: 12, color: Colors.textMuted },
+  statusBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6 },
+  statusDot: { width: 5, height: 5, borderRadius: 3 },
+  statusText: { fontSize: 11, fontWeight: '600', textTransform: 'capitalize' },
+  skrTag: {
+    marginTop: 5, alignSelf: 'flex-start',
+    backgroundColor: Colors.skrGoldDim, borderRadius: 6,
+    paddingHorizontal: 7, paddingVertical: 2,
+    borderWidth: 1, borderColor: Colors.skrGoldBorder,
+  },
+  skrTagText: { fontSize: 11, color: Colors.skrGold, fontWeight: '600' },
+
+  empty: { alignItems: 'center', paddingTop: 60 },
+  emptyEmoji: { fontSize: 40, marginBottom: 12 },
+  emptyText: { fontSize: 16, fontWeight: '700', color: Colors.textSecondary },
+  emptySub: { fontSize: 13, color: Colors.textMuted, marginTop: 4, textAlign: 'center' },
 });

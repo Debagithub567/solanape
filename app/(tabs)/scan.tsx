@@ -1,586 +1,259 @@
-import { useState, useCallback } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  Alert,
-  Vibration,
-  Linking,
-} from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Vibration } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
-import { useRouter, useFocusEffect } from 'expo-router';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import * as ImagePicker from 'expo-image-picker';
-import { useWalletStore } from '../../src/stores/wallet-store';
+import Animated, {
+  useSharedValue, useAnimatedStyle, withRepeat, withTiming,
+  withSequence, FadeIn,
+} from 'react-native-reanimated';
+import { useRouter } from 'expo-router';
+import Svg, { Path, Rect } from 'react-native-svg';
+import { Colors, Spacing, Radius } from '../../constants/theme';
+import { isValidSolanaAddress } from '../../utils/solana';
 
-const C = {
-  bg: '#0D0D12',
-  card: '#1A1A24',
-  purple: '#7C3AED',
-  green: '#14F195',
-  skr: '#9945FF',
-  border: 'rgba(124,58,237,0.25)',
-  text: '#FFFFFF',
-  sub: '#AAAAAA',
-  muted: '#555555',
-  red: '#EF4444',
-};
+const { width: SW, height: SH } = Dimensions.get('window');
+const SCANNER_SIZE = SW - 80;
 
-const FRAME_SIZE = 260;
-const OVERLAY_COLOR = 'rgba(0,0,0,0.65)';
+const BackIcon = () => (
+  <Svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+    <Path d="M19 12H5M12 5l-7 7 7 7" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+  </Svg>
+);
 
-export default function Scan() {
+export default function ScanScreen() {
   const router = useRouter();
-
-  // ── Read directly from store (NEVER from useWallet hook) ──
-  const isConnected = useWalletStore((s) => s.isConnected);
-
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
-  const [torch, setTorch] = useState(false);
+  const [flashOn, setFlashOn] = useState(false);
 
-  // ── Reset torch + scanned state on blur ──
-  useFocusEffect(
-    useCallback(() => {
-      return () => {
-        setTorch(false);
-        setScanned(false);
-      };
-    }, [])
-  );
+  const scanLine = useSharedValue(0);
+  const cornerPulse = useSharedValue(1);
 
-  // ── Parse Solana QR ──
-  const parseQR = (data: string): { address: string; amount?: string } | null => {
-    try {
-      if (data.startsWith('solana:')) {
-        const withoutScheme = data.replace('solana:', '');
-        const [addressPart, queryPart] = withoutScheme.split('?');
-        const address = addressPart.trim();
-        let amount: string | undefined;
-        if (queryPart) {
-          const params = new URLSearchParams(queryPart);
-          amount = params.get('amount') ?? undefined;
-        }
-        if (address.length >= 32 && address.length <= 44) {
-          return { address, amount };
-        }
-      } else if (data.length >= 32 && data.length <= 44) {
-        return { address: data };
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  };
-
-  const navigateToSend = (address: string, amount?: string) => {
-    setTorch(false);
-    const query = amount
-      ? `?address=${encodeURIComponent(address)}&amount=${encodeURIComponent(amount)}`
-      : `?address=${encodeURIComponent(address)}`;
-    router.push((`/send${query}`) as any);
-  };
-
-  // ── Connect wallet prompt ──
-  const showConnectPrompt = () => {
-    Alert.alert(
-      '🔗 Connect Wallet First',
-      'You need to connect your Phantom wallet before scanning a QR code to send SOL.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Connect Wallet',
-          onPress: () => {
-            // connect() lives on useWallet hook only — navigate to Home tab
-            // where the user can tap the Connect button.
-            router.push('/(tabs)/' as any);
-          },
-        },
-      ]
+  useEffect(() => {
+    // Scan line animation
+    scanLine.value = withRepeat(
+      withSequence(
+        withTiming(SCANNER_SIZE - 4, { duration: 2000 }),
+        withTiming(0, { duration: 2000 })
+      ),
+      -1, false
     );
-  };
+    // Corner pulse
+    cornerPulse.value = withRepeat(
+      withSequence(withTiming(1.05, { duration: 800 }), withTiming(1, { duration: 800 })),
+      -1, true
+    );
+  }, []);
 
-  // ── Camera scan handler ──
-  const handleBarCodeScanned = ({ data }: { data: string }) => {
+  const scanLineStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: scanLine.value }],
+  }));
+
+  const cornerStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: cornerPulse.value }],
+  }));
+
+  const handleBarCodeScanned = ({ type, data }: { type: string; data: string }) => {
     if (scanned) return;
-
-    if (!isConnected) {
-      showConnectPrompt();
-      return;
-    }
-
     setScanned(true);
-    Vibration.vibrate(100);
+    Vibration.vibrate(80);
 
-    const parsed = parseQR(data);
-
-    if (!parsed) {
-      Alert.alert(
-        'Invalid QR Code',
-        'This QR code does not contain a valid Solana address. Please scan a Solana wallet or payment QR.',
-        [{ text: 'Scan Again', onPress: () => setScanned(false) }]
-      );
-      return;
+    // Parse solana: URI or raw address
+    let address = data;
+    if (data.startsWith('solana:')) {
+      address = data.replace('solana:', '').split('?')[0];
     }
 
-    navigateToSend(parsed.address, parsed.amount);
-    setTimeout(() => setScanned(false), 2000);
-  };
-
-  // ── Gallery picker ──
-  const handleGalleryPick = async () => {
-    if (!isConnected) {
-      showConnectPrompt();
-      return;
-    }
-
-    try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: false,
-        quality: 1,
-      });
-
-      if (result.canceled) return;
-
-      Alert.alert(
-        'QR Image Selected',
-        'Automatic QR decoding from gallery images is not supported yet. Please enter the wallet address manually or use the camera to scan directly.',
-        [
-          {
-            text: 'Enter Manually',
-            onPress: () => {
-              setTorch(false);
-              router.push('/send' as any);
-            },
-          },
-          { text: 'Use Camera', style: 'cancel' },
-        ]
-      );
-    } catch {
-      Alert.alert('Error', 'Could not open gallery. Please try again.');
+    if (isValidSolanaAddress(address)) {
+      setTimeout(() => {
+        router.push({ pathname: '/send', params: { prefillAddress: address } });
+      }, 300);
+    } else {
+      setTimeout(() => setScanned(false), 2000);
     }
   };
 
-  // ── Permission loading ──
-  if (!permission) {
-    return (
-      <SafeAreaView style={s.safe}>
-        <View style={s.center}>
-          <Text style={s.text}>Checking camera permission...</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  if (!permission) return <View style={styles.container} />;
 
-  // ── Permission denied ──
   if (!permission.granted) {
     return (
-      <SafeAreaView style={s.safe}>
-        <View style={s.center}>
-          <Ionicons name="camera-outline" size={72} color={C.purple} />
-          <Text style={s.permTitle}>Camera Access Required</Text>
-          <Text style={s.permSub}>
-            SolanaPe needs camera access to scan Solana payment QR codes.
-          </Text>
-
-          {permission.canAskAgain ? (
-            <TouchableOpacity style={s.permBtn} onPress={requestPermission}>
-              <Ionicons name="camera-outline" size={18} color="#fff" />
-              <Text style={s.permBtnText}>Allow Camera Access</Text>
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity style={s.permBtn} onPress={() => Linking.openSettings()}>
-              <Ionicons name="settings-outline" size={18} color="#fff" />
-              <Text style={s.permBtnText}>Open Settings</Text>
-            </TouchableOpacity>
-          )}
-
-          <TouchableOpacity style={s.galleryPermBtn} onPress={handleGalleryPick}>
-            <Ionicons name="images-outline" size={18} color={C.purple} />
-            <Text style={s.galleryPermBtnText}>Pick from Gallery Instead</Text>
+      <View style={[styles.container, styles.centered]}>
+        <SafeAreaView>
+          <Text style={styles.permTitle}>Camera Access Needed</Text>
+          <Text style={styles.permSub}>Solanape needs camera access to scan QR codes for payments</Text>
+          <TouchableOpacity style={styles.permBtn} onPress={requestPermission}>
+            <Text style={styles.permBtnText}>Allow Camera</Text>
           </TouchableOpacity>
-        </View>
-      </SafeAreaView>
+          <TouchableOpacity style={styles.cancelBtn} onPress={() => router.back()}>
+            <Text style={styles.cancelText}>Cancel</Text>
+          </TouchableOpacity>
+        </SafeAreaView>
+      </View>
     );
   }
 
-  // ── Main scan screen ──
   return (
-    <View style={s.fullScreen}>
-
-      {/* CAMERA */}
+    <View style={styles.container}>
       <CameraView
         style={StyleSheet.absoluteFillObject}
         facing="back"
-        enableTorch={torch}
-        barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+        enableTorch={flashOn}
         onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
+        barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
       />
 
-      {/* DARK OVERLAY cutout around scan frame */}
-      <View style={s.overlayTop} />
-      <View style={s.overlayBottom} />
-      <View style={s.overlayLeft} />
-      <View style={s.overlayRight} />
-
-      <SafeAreaView style={s.overlay}>
-
-        {/* HEADER */}
-        <View style={s.header}>
-          <Text style={s.headerTitle}>Scan to Pay</Text>
-          <View style={[
-            s.connectionBadge,
-            { backgroundColor: isConnected ? 'rgba(20,241,149,0.15)' : 'rgba(239,68,68,0.15)' },
-          ]}>
-            <View style={[
-              s.connectionDot,
-              { backgroundColor: isConnected ? C.green : C.red },
-            ]} />
-            <Text style={[
-              s.connectionText,
-              { color: isConnected ? C.green : C.red },
-            ]}>
-              {isConnected ? 'Wallet Connected' : 'Not Connected'}
-            </Text>
+      {/* Dark overlay */}
+      <View style={styles.overlay}>
+        {/* Top */}
+        <View style={[styles.overlaySection, { flex: 1 }]} />
+        {/* Middle row */}
+        <View style={styles.middleRow}>
+          <View style={styles.overlaySection} />
+          {/* Scanner window */}
+          <View style={styles.scanWindow}>
+            <Animated.View style={[StyleSheet.absoluteFillObject, cornerStyle]}>
+              {/* Corners */}
+              <View style={[styles.corner, styles.cornerTL]} />
+              <View style={[styles.corner, styles.cornerTR]} />
+              <View style={[styles.corner, styles.cornerBL]} />
+              <View style={[styles.corner, styles.cornerBR]} />
+            </Animated.View>
+            {/* Scan line */}
+            <Animated.View style={[styles.scanLine, scanLineStyle]} />
           </View>
+          <View style={styles.overlaySection} />
         </View>
+        {/* Bottom */}
+        <View style={[styles.overlaySection, { flex: 1 }]} />
+      </View>
 
-        {/* SCAN FRAME */}
-        <View style={s.scanArea}>
-          <View style={s.scanFrame}>
-            {/* Corner brackets */}
-            <View style={[s.corner, s.tl]} />
-            <View style={[s.corner, s.tr]} />
-            <View style={[s.corner, s.bl]} />
-            <View style={[s.corner, s.br]} />
+      {/* UI overlay */}
+      <SafeAreaView style={styles.uiOverlay} edges={['top', 'bottom']}>
+        {/* Header */}
+        <Animated.View entering={FadeIn.duration(400)} style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+            <BackIcon />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Scan QR Code</Text>
+          <TouchableOpacity onPress={() => setFlashOn(!flashOn)} style={styles.flashBtn}>
+            <Text style={{ fontSize: 20 }}>{flashOn ? '🔦' : '💡'}</Text>
+          </TouchableOpacity>
+        </Animated.View>
 
-            {/* Scanned success state */}
-            {scanned && (
-              <View style={s.scannedOverlay}>
-                <Ionicons name="checkmark-circle" size={60} color={C.green} />
-                <Text style={s.scannedText}>Address Found!</Text>
-                <Text style={s.scannedSubText}>Redirecting to Send...</Text>
-              </View>
-            )}
-
-            {/* Not connected nudge inside frame */}
-            {!isConnected && !scanned && (
-              <TouchableOpacity style={s.notConnectedOverlay} onPress={showConnectPrompt}>
-                <Ionicons name="wallet-outline" size={36} color={C.red} />
-                <Text style={s.notConnectedText}>Tap to Connect Wallet</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-
-          <Text style={s.scanHint}>
-            {isConnected
-              ? 'Point at a Solana wallet or payment QR code'
-              : 'Connect your wallet before scanning'}
+        {/* Center hint */}
+        <View style={styles.hintWrap}>
+          <Text style={styles.hintText}>
+            {scanned ? '✓ QR Detected! Redirecting...' : 'Align the QR code within the frame'}
           </Text>
         </View>
 
-        {/* BOTTOM ACTIONS */}
-        <View style={s.bottom}>
-          <View style={s.bottomActions}>
-
-            {/* Torch */}
-            <TouchableOpacity style={s.bottomActionBtn} onPress={() => setTorch((t) => !t)}>
-              <View style={[s.bottomActionIcon, torch && s.bottomActionIconActive]}>
-                <Ionicons
-                  name={torch ? 'flash' : 'flash-outline'}
-                  size={24}
-                  color={torch ? '#F59E0B' : '#fff'}
-                />
-              </View>
-              <Text style={[s.bottomActionText, torch && { color: '#F59E0B' }]}>
-                {torch ? 'Torch On' : 'Torch'}
-              </Text>
-            </TouchableOpacity>
-
-            {/* Gallery */}
-            <TouchableOpacity style={s.bottomActionBtn} onPress={handleGalleryPick}>
-              <View style={s.bottomActionIcon}>
-                <Ionicons name="images-outline" size={24} color="#fff" />
-              </View>
-              <Text style={s.bottomActionText}>Gallery</Text>
-            </TouchableOpacity>
-
-            {/* Manual entry */}
-            <TouchableOpacity
-              style={s.bottomActionBtn}
-              onPress={() => {
-                if (!isConnected) { showConnectPrompt(); return; }
-                setTorch(false);
-                router.push('/send' as any);
-              }}
-            >
-              <View style={s.bottomActionIcon}>
-                <Ionicons name="keypad-outline" size={24} color="#fff" />
-              </View>
-              <Text style={s.bottomActionText}>Manual</Text>
-            </TouchableOpacity>
-
-            {/* My QR */}
-            <TouchableOpacity
-              style={s.bottomActionBtn}
-              onPress={() => {
-                setTorch(false);
-                router.push('/receive' as any);
-              }}
-            >
-              <View style={s.bottomActionIcon}>
-                <Ionicons name="qr-code-outline" size={24} color="#fff" />
-              </View>
-              <Text style={s.bottomActionText}>My QR</Text>
-            </TouchableOpacity>
-
+        {/* Bottom info */}
+        <Animated.View entering={FadeIn.delay(300).duration(400)} style={styles.bottomInfo}>
+          <View style={styles.infoCard}>
+            <Text style={styles.infoEmoji}>⚡</Text>
+            <View>
+              <Text style={styles.infoTitle}>Solana Pay Compatible</Text>
+              <Text style={styles.infoSub}>Scan any Solana wallet or merchant QR</Text>
+            </View>
           </View>
-        </View>
-
+          {scanned && (
+            <TouchableOpacity style={styles.rescanBtn} onPress={() => setScanned(false)}>
+              <Text style={styles.rescanText}>Tap to scan again</Text>
+            </TouchableOpacity>
+          )}
+        </Animated.View>
       </SafeAreaView>
     </View>
   );
 }
 
-const s = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: C.bg,
-  },
-  fullScreen: {
-    flex: 1,
-    backgroundColor: '#000',
-  },
+const CORNER_SIZE = 24;
+const CORNER_THICK = 3;
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#000' },
+  centered: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
+
   overlay: {
-    flex: 1,
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: 'column',
   },
+  overlaySection: {
+    backgroundColor: 'rgba(0,0,0,0.62)',
+    width: 40,
+  },
+  middleRow: { flexDirection: 'row', height: SCANNER_SIZE },
+  scanWindow: {
+    width: SCANNER_SIZE, height: SCANNER_SIZE,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  scanLine: {
+    position: 'absolute',
+    left: 0, right: 0, height: 2,
+    backgroundColor: Colors.green,
+    shadowColor: Colors.green,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 6,
+  },
+  corner: { position: 'absolute', width: CORNER_SIZE, height: CORNER_SIZE },
+  cornerTL: { top: 0, left: 0, borderTopWidth: CORNER_THICK, borderLeftWidth: CORNER_THICK, borderColor: Colors.green, borderTopLeftRadius: 4 },
+  cornerTR: { top: 0, right: 0, borderTopWidth: CORNER_THICK, borderRightWidth: CORNER_THICK, borderColor: Colors.green, borderTopRightRadius: 4 },
+  cornerBL: { bottom: 0, left: 0, borderBottomWidth: CORNER_THICK, borderLeftWidth: CORNER_THICK, borderColor: Colors.green, borderBottomLeftRadius: 4 },
+  cornerBR: { bottom: 0, right: 0, borderBottomWidth: CORNER_THICK, borderRightWidth: CORNER_THICK, borderColor: Colors.green, borderBottomRightRadius: 4 },
 
-  // Cutout overlay panels
-  overlayTop: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: '25%',
-    backgroundColor: OVERLAY_COLOR,
-  },
-  overlayBottom: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: '30%',
-    backgroundColor: OVERLAY_COLOR,
-  },
-  overlayLeft: {
-    position: 'absolute',
-    top: '25%',
-    left: 0,
-    width: '15%',
-    height: '45%',
-    backgroundColor: OVERLAY_COLOR,
-  },
-  overlayRight: {
-    position: 'absolute',
-    top: '25%',
-    right: 0,
-    width: '15%',
-    height: '45%',
-    backgroundColor: OVERLAY_COLOR,
-  },
-
-  // Permission screen
-  center: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 32,
-    gap: 16,
-    backgroundColor: C.bg,
-  },
-  text: {
-    color: C.text,
-    fontSize: 16,
-  },
-  permTitle: {
-    color: C.text,
-    fontSize: 22,
-    fontWeight: 'bold',
-    textAlign: 'center',
-  },
-  permSub: {
-    color: C.sub,
-    fontSize: 15,
-    textAlign: 'center',
-    lineHeight: 22,
-  },
-  permBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: C.purple,
-    paddingHorizontal: 32,
-    paddingVertical: 14,
-    borderRadius: 16,
-    marginTop: 8,
-    width: '100%',
-    justifyContent: 'center',
-  },
-  permBtnText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  galleryPermBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 14,
-    width: '100%',
-    justifyContent: 'center',
-  },
-  galleryPermBtnText: {
-    color: C.purple,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-
-  // Header
+  uiOverlay: { ...StyleSheet.absoluteFillObject },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 8,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: Spacing.screen, paddingVertical: 12,
   },
-  headerTitle: {
-    color: '#fff',
-    fontSize: 20,
-    fontWeight: 'bold',
+  backBtn: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center',
   },
-  connectionBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-  connectionDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-  },
-  connectionText: {
-    fontSize: 12,
-    fontWeight: '600',
+  headerTitle: { fontSize: 18, fontWeight: '700', color: '#fff' },
+  flashBtn: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center',
   },
 
-  // Scan area
-  scanArea: {
-    flex: 1,
-    justifyContent: 'center',
+  hintWrap: {
     alignItems: 'center',
-    gap: 20,
+    marginTop: (SH - SCANNER_SIZE) / 2 - 80,
   },
-  scanFrame: {
-    width: FRAME_SIZE,
-    height: FRAME_SIZE,
-    justifyContent: 'center',
-    alignItems: 'center',
+  hintText: {
+    color: '#fff', fontSize: 14, fontWeight: '600',
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 16, paddingVertical: 8, borderRadius: Radius.full,
+    overflow: 'hidden',
   },
 
-  // Corner brackets
-  corner: {
-    position: 'absolute',
-    width: 28,
-    height: 28,
-    borderColor: C.green,
-    borderWidth: 3,
+  bottomInfo: {
+    position: 'absolute', bottom: 40, left: Spacing.screen, right: Spacing.screen,
   },
-  tl: { top: 0, left: 0, borderRightWidth: 0, borderBottomWidth: 0, borderTopLeftRadius: 6 },
-  tr: { top: 0, right: 0, borderLeftWidth: 0, borderBottomWidth: 0, borderTopRightRadius: 6 },
-  bl: { bottom: 0, left: 0, borderRightWidth: 0, borderTopWidth: 0, borderBottomLeftRadius: 6 },
-  br: { bottom: 0, right: 0, borderLeftWidth: 0, borderTopWidth: 0, borderBottomRightRadius: 6 },
+  infoCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: 'rgba(10,10,18,0.85)',
+    borderRadius: Radius.lg, padding: 14,
+    borderWidth: 1, borderColor: Colors.greenBorder,
+    marginBottom: 12,
+  },
+  infoEmoji: { fontSize: 24 },
+  infoTitle: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  infoSub: { fontSize: 12, color: 'rgba(255,255,255,0.5)', marginTop: 2 },
+  rescanBtn: {
+    backgroundColor: Colors.green, borderRadius: Radius.full,
+    paddingVertical: 12, alignItems: 'center',
+  },
+  rescanText: { fontSize: 15, fontWeight: '700', color: Colors.bg },
 
-  // In-frame overlays
-  scannedOverlay: {
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: 'rgba(0,0,0,0.82)',
-    padding: 24,
-    borderRadius: 16,
+  permTitle: { fontSize: 22, fontWeight: '800', color: '#fff', textAlign: 'center', marginBottom: 8 },
+  permSub: { fontSize: 14, color: 'rgba(255,255,255,0.5)', textAlign: 'center', marginBottom: 24 },
+  permBtn: {
+    backgroundColor: Colors.green, borderRadius: Radius.full,
+    paddingVertical: 14, alignItems: 'center', marginBottom: 12,
   },
-  scannedText: {
-    color: C.green,
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  scannedSubText: {
-    color: C.sub,
-    fontSize: 13,
-  },
-  notConnectedOverlay: {
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: 'rgba(0,0,0,0.78)',
-    padding: 24,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(239,68,68,0.35)',
-  },
-  notConnectedText: {
-    color: C.red,
-    fontSize: 14,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  scanHint: {
-    color: 'rgba(255,255,255,0.72)',
-    fontSize: 14,
-    textAlign: 'center',
-    paddingHorizontal: 40,
-  },
-
-  // Bottom bar
-  bottom: {
-    paddingBottom: 32,
-    paddingHorizontal: 20,
-  },
-  bottomActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    backgroundColor: 'rgba(255,255,255,0.07)',
-    borderRadius: 20,
-    paddingVertical: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-  },
-  bottomActionBtn: {
-    alignItems: 'center',
-    gap: 8,
-  },
-  bottomActionIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.15)',
-  },
-  bottomActionIconActive: {
-    backgroundColor: 'rgba(245,158,11,0.18)',
-    borderColor: '#F59E0B',
-  },
-  bottomActionText: {
-    color: 'rgba(255,255,255,0.72)',
-    fontSize: 12,
-    fontWeight: '500',
-  },
+  permBtnText: { fontSize: 16, fontWeight: '700', color: Colors.bg },
+  cancelBtn: { alignItems: 'center', paddingVertical: 10 },
+  cancelText: { fontSize: 15, color: 'rgba(255,255,255,0.5)' },
 });

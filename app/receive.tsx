@@ -1,275 +1,266 @@
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  Share,
-  Alert,
-} from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Share, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import Animated, {
+  useSharedValue, useAnimatedStyle, withSpring, withRepeat,
+  withSequence, withTiming, FadeIn, FadeInDown,
+} from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
-import { useWalletStore } from '../src/stores/wallet-store';
 import QRCode from 'react-native-qrcode-svg';
+import Svg, { Path } from 'react-native-svg';
+import { useWalletStore } from '../src/stores/wallet-store';
+import { Colors, Spacing, Radius } from '../constants/theme';
+import { shortenAddress } from '../utils/solana';
 
-const C = {
-  bg: '#0D0D12',
-  card: '#1A1A24',
-  purple: '#7C3AED',
-  green: '#14F195',
-  border: 'rgba(124,58,237,0.25)',
-  text: '#FFFFFF',
-  sub: '#AAAAAA',
-  muted: '#555555',
-};
+const { width: SW } = Dimensions.get('window');
+const QR_SIZE = SW - 120;
 
-export default function Receive() {
+const BackIcon = () => (
+  <Svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+    <Path d="M19 12H5M12 5l-7 7 7 7" stroke={Colors.textPrimary} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+  </Svg>
+);
+
+export default function ReceiveScreen() {
   const router = useRouter();
-  const publicKey = useWalletStore((s) => s.publicKey);
-  const isConnected = useWalletStore((s) => s.isConnected);
+  const { connected, publicKey, solBalance, skrBalance } = useWalletStore();
+  const [copied, setCopied] = useState(false);
+  const [token, setToken] = useState<'SOL' | 'SKR'>('SOL');
 
-  // Solana Pay format — scannable by any Solana wallet
-  const qrValue = publicKey ? `solana:${publicKey}` : '';
+  const qrScale = useSharedValue(0.85);
+  const qrOpacity = useSharedValue(0);
+  const pulse = useSharedValue(1);
 
-  const shortAddress = publicKey
-    ? `${publicKey.slice(0, 8)}...${publicKey.slice(-8)}`
-    : 'Not connected';
+  React.useEffect(() => {
+    qrScale.value = withSpring(1, { damping: 14 });
+    qrOpacity.value = withTiming(1, { duration: 500 });
+    pulse.value = withRepeat(
+      withSequence(withTiming(1.03, { duration: 1200 }), withTiming(1, { duration: 1200 })),
+      -1, true
+    );
+  }, []);
+
+  const qrStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: qrScale.value }],
+    opacity: qrOpacity.value,
+  }));
+
+  const pulseStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: pulse.value }],
+  }));
 
   const handleCopy = async () => {
     if (!publicKey) return;
     await Clipboard.setStringAsync(publicKey);
-    Alert.alert('Copied!', 'Wallet address copied to clipboard.');
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const handleShare = async () => {
     if (!publicKey) return;
     await Share.share({
-      message: `Send me SOL on SolanaPe!\n\nWallet Address:\n${publicKey}\n\nOr scan my QR code in SolanaPe 🚀`,
-      title: 'My SolanaPe Address',
+      message: `Send SOL or SKR to my Solanape wallet:\n${publicKey}`,
     });
   };
 
-  const handleWhatsApp = async () => {
-    if (!publicKey) return;
-    const message = encodeURIComponent(
-      `Send me SOL on SolanaPe! 🚀\n\nMy wallet address:\n${publicKey}`
-    );
-    const { Linking } = require('react-native');
-    try {
-      await Linking.openURL(`whatsapp://send?text=${message}`);
-    } catch {
-      Alert.alert('WhatsApp not installed', 'Please use the Share button instead.');
-    }
-  };
+  const displayAddress = publicKey || 'Connect wallet to show QR';
+  const qrValue = publicKey ? `solana:${publicKey}` : 'solanape://connect';
 
   return (
-    <SafeAreaView style={s.safe}>
+    <View style={styles.container}>
+      <SafeAreaView style={{ flex: 1 }} edges={['top']}>
+        {/* Header */}
+        <Animated.View entering={FadeIn.duration(300)} style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
+            <BackIcon />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Receive Payment</Text>
+          <View style={{ width: 40 }} />
+        </Animated.View>
 
-      {/* HEADER */}
-      <View style={s.header}>
-        <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
-          <Ionicons name="chevron-down" size={24} color={C.text} />
-        </TouchableOpacity>
-        <Text style={s.title}>Receive Tips</Text>
-        <View style={{ width: 40 }} />
-      </View>
+        <View style={styles.content}>
+          {/* Token selector */}
+          <Animated.View entering={FadeInDown.delay(100).duration(300)} style={styles.tokenRow}>
+            {(['SOL', 'SKR'] as const).map(t => (
+              <TouchableOpacity
+                key={t}
+                style={[styles.tokenBtn, token === t && (t === 'SOL' ? styles.tokenBtnActiveSol : styles.tokenBtnActiveSKR)]}
+                onPress={() => setToken(t)}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.tokenBtnText, token === t && { color: t === 'SOL' ? Colors.green : Colors.skrGold }]}>
+                  {t === 'SOL' ? '◎' : '🔮'} {t}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </Animated.View>
 
-      <View style={s.body}>
-        <Text style={s.subtitle}>
-          Show this QR to receive SOL instantly
-        </Text>
+          {/* QR Card */}
+          <Animated.View entering={FadeInDown.delay(200).duration(400)} style={qrStyle}>
+            <Animated.View style={[styles.qrCard, pulseStyle]}>
+              {/* Corner decorations */}
+              <View style={[styles.corner, styles.cornerTL]} />
+              <View style={[styles.corner, styles.cornerTR]} />
+              <View style={[styles.corner, styles.cornerBL]} />
+              <View style={[styles.corner, styles.cornerBR]} />
 
-        {/* QR CODE */}
-        <View style={s.qrCard}>
-          {isConnected && publicKey ? (
-            <>
-              <QRCode
-                value={qrValue}
-                size={220}
-                color={C.purple}
-                backgroundColor="#FFFFFF"
-              />
-              <Text style={s.qrHint}>Scan with any Solana wallet</Text>
-            </>
-          ) : (
-            <View style={s.qrPlaceholder}>
-              <Ionicons name="wallet-outline" size={48} color={C.muted} />
-              <Text style={s.qrPlaceholderText}>
-                Connect wallet to generate QR
+              <View style={styles.qrWrap}>
+                <QRCode
+                  value={qrValue}
+                  size={QR_SIZE - 40}
+                  color="#FFFFFF"
+                  backgroundColor="transparent"
+                  quietZone={10}
+                />
+              </View>
+
+              {/* Solanape logo overlay at center */}
+              <View style={styles.qrLogo}>
+                <Text style={styles.qrLogoText}>🐒</Text>
+              </View>
+
+              <View style={styles.qrBadge}>
+                <View style={[styles.qrDot, { backgroundColor: token === 'SKR' ? Colors.skrGold : Colors.green }]} />
+                <Text style={[styles.qrBadgeText, { color: token === 'SKR' ? Colors.skrGold : Colors.green }]}>
+                  {token} · Devnet
+                </Text>
+              </View>
+            </Animated.View>
+          </Animated.View>
+
+          {/* Address */}
+          <Animated.View entering={FadeInDown.delay(350).duration(300)} style={styles.addressCard}>
+            <Text style={styles.addressLabel}>Your Wallet Address</Text>
+            <Text style={styles.addressText} numberOfLines={2} selectable>
+              {displayAddress}
+            </Text>
+          </Animated.View>
+
+          {/* Buttons */}
+          <Animated.View entering={FadeInDown.delay(450).duration(300)} style={styles.btnRow}>
+            <TouchableOpacity
+              style={[styles.actionBtn, copied && styles.actionBtnCopied]}
+              onPress={handleCopy}
+              activeOpacity={0.8}
+              disabled={!publicKey}
+            >
+              <Text style={styles.actionBtnText}>{copied ? '✓ Copied!' : 'Copy Address'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.actionBtnSecondary}
+              onPress={handleShare}
+              activeOpacity={0.8}
+              disabled={!publicKey}
+            >
+              <Text style={styles.actionBtnSecText}>Share ↑</Text>
+            </TouchableOpacity>
+          </Animated.View>
+
+          {!connected && (
+            <Animated.View entering={FadeInDown.delay(500)} style={styles.connectHint}>
+              <Text style={styles.connectHintText}>
+                ↑ Connect wallet on Home to activate your QR
               </Text>
-            </View>
+            </Animated.View>
           )}
         </View>
-
-        {/* ADDRESS BOX */}
-        <TouchableOpacity style={s.addressBox} onPress={handleCopy}>
-          <View style={s.addressInner}>
-            <Text style={s.addressLabel}>Your Address</Text>
-            <Text style={s.addressText} numberOfLines={1}>
-              {publicKey ?? 'Not connected'}
-            </Text>
-          </View>
-          <Ionicons name="copy-outline" size={20} color={C.purple} />
-        </TouchableOpacity>
-
-        {/* ACTION BUTTONS */}
-        <TouchableOpacity style={s.copyBtn} onPress={handleCopy}>
-          <Ionicons name="copy-outline" size={20} color={C.text} />
-          <Text style={s.copyBtnText}>Copy Address</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={s.shareBtn} onPress={handleShare}>
-          <Ionicons name="share-outline" size={20} color="#fff" />
-          <Text style={s.shareBtnText}>Share Address</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={s.whatsappBtn} onPress={handleWhatsApp}>
-          <Ionicons name="logo-whatsapp" size={20} color="#fff" />
-          <Text style={s.whatsappBtnText}>Share on WhatsApp</Text>
-        </TouchableOpacity>
-
-      </View>
-    </SafeAreaView>
+      </SafeAreaView>
+    </View>
   );
 }
 
-const s = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: C.bg,
-  },
+const CORNER_SIZE = 22;
+const CORNER_THICKNESS = 3;
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: Colors.bg },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 8,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: Spacing.screen, paddingVertical: 12,
   },
   backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: C.card,
-    justifyContent: 'center',
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: Colors.bgCard, alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  headerTitle: { fontSize: 18, fontWeight: '700', color: Colors.textPrimary },
+
+  content: { flex: 1, paddingHorizontal: Spacing.screen, alignItems: 'center' },
+
+  tokenRow: {
+    flexDirection: 'row', gap: 10,
+    backgroundColor: Colors.bgCard,
+    borderRadius: Radius.lg, padding: 5,
+    marginBottom: 24, alignSelf: 'stretch',
+  },
+  tokenBtn: {
+    flex: 1, paddingVertical: 10, borderRadius: Radius.md,
     alignItems: 'center',
   },
-  title: {
-    color: C.text,
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  body: {
-    flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    alignItems: 'center',
-    gap: 14,
-  },
-  subtitle: {
-    color: C.sub,
-    fontSize: 15,
-    textAlign: 'center',
-  },
+  tokenBtnActiveSol: { backgroundColor: Colors.greenDim, borderWidth: 1, borderColor: Colors.greenBorder },
+  tokenBtnActiveSKR: { backgroundColor: Colors.skrGoldDim, borderWidth: 1, borderColor: Colors.skrGoldBorder },
+  tokenBtnText: { fontSize: 15, fontWeight: '700', color: Colors.textSecondary },
+
   qrCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    padding: 24,
-    alignItems: 'center',
-    gap: 12,
-    width: '100%',
+    backgroundColor: Colors.bgCard,
+    borderRadius: Radius.xxl, borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 20, alignItems: 'center',
+    position: 'relative',
+    marginBottom: 20,
+    width: QR_SIZE,
   },
-  qrHint: {
-    color: C.muted,
-    fontSize: 12,
-    marginTop: 4,
+  corner: {
+    position: 'absolute', width: CORNER_SIZE, height: CORNER_SIZE,
+    borderColor: Colors.green,
   },
-  qrPlaceholder: {
-    width: 220,
-    height: 220,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 12,
+  cornerTL: { top: 12, left: 12, borderTopWidth: CORNER_THICKNESS, borderLeftWidth: CORNER_THICKNESS, borderTopLeftRadius: 6 },
+  cornerTR: { top: 12, right: 12, borderTopWidth: CORNER_THICKNESS, borderRightWidth: CORNER_THICKNESS, borderTopRightRadius: 6 },
+  cornerBL: { bottom: 36, left: 12, borderBottomWidth: CORNER_THICKNESS, borderLeftWidth: CORNER_THICKNESS, borderBottomLeftRadius: 6 },
+  cornerBR: { bottom: 36, right: 12, borderBottomWidth: CORNER_THICKNESS, borderRightWidth: CORNER_THICKNESS, borderBottomRightRadius: 6 },
+
+  qrWrap: { alignItems: 'center', justifyContent: 'center' },
+  qrLogo: {
+    position: 'absolute',
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: Colors.bgCard,
+    alignItems: 'center', justifyContent: 'center',
   },
-  qrPlaceholderText: {
-    color: C.muted,
-    fontSize: 14,
-    textAlign: 'center',
+  qrLogoText: { fontSize: 20 },
+
+  qrBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    marginTop: 12,
   },
-  addressBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: C.card,
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: C.border,
-    width: '100%',
-    gap: 12,
+  qrDot: { width: 6, height: 6, borderRadius: 3 },
+  qrBadgeText: { fontSize: 12, fontWeight: '600' },
+
+  addressCard: {
+    backgroundColor: Colors.bgCard,
+    borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border,
+    padding: 14, alignSelf: 'stretch', marginBottom: 16,
   },
-  addressInner: {
-    flex: 1,
-    gap: 4,
+  addressLabel: { fontSize: 11, color: Colors.textMuted, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: '600' },
+  addressText: { fontSize: 12, color: Colors.textSecondary, fontFamily: 'monospace', lineHeight: 18 },
+
+  btnRow: { flexDirection: 'row', gap: 10, alignSelf: 'stretch' },
+  actionBtn: {
+    flex: 2, height: 52, borderRadius: Radius.full,
+    backgroundColor: Colors.green, alignItems: 'center', justifyContent: 'center',
   },
-  addressLabel: {
-    color: C.muted,
-    fontSize: 11,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
+  actionBtnCopied: { backgroundColor: Colors.purple },
+  actionBtnText: { fontSize: 15, fontWeight: '700', color: Colors.bg },
+  actionBtnSecondary: {
+    flex: 1, height: 52, borderRadius: Radius.full,
+    backgroundColor: Colors.bgCard, borderWidth: 1, borderColor: Colors.border,
+    alignItems: 'center', justifyContent: 'center',
   },
-  addressText: {
-    color: C.text,
-    fontSize: 14,
-    fontFamily: 'monospace',
+  actionBtnSecText: { fontSize: 15, fontWeight: '600', color: Colors.textSecondary },
+
+  connectHint: {
+    marginTop: 16, paddingHorizontal: 16, paddingVertical: 10,
+    backgroundColor: Colors.bgCard, borderRadius: Radius.lg,
+    borderWidth: 1, borderColor: Colors.border,
   },
-  copyBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    backgroundColor: C.card,
-    borderRadius: 16,
-    paddingVertical: 16,
-    width: '100%',
-    borderWidth: 1,
-    borderColor: C.border,
-  },
-  copyBtnText: {
-    color: C.text,
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  shareBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    backgroundColor: C.card,
-    borderRadius: 16,
-    paddingVertical: 16,
-    width: '100%',
-    borderWidth: 1,
-    borderColor: C.border,
-  },
-  shareBtnText: {
-    color: C.text,
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  whatsappBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    backgroundColor: '#25D366',
-    borderRadius: 16,
-    paddingVertical: 16,
-    width: '100%',
-  },
-  whatsappBtnText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
+  connectHintText: { fontSize: 12, color: Colors.textMuted, textAlign: 'center' },
 });

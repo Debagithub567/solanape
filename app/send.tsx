@@ -1,556 +1,425 @@
+import React, { useState, useRef, useCallback } from 'react';
 import {
-  View,
-  Text,
-  TouchableOpacity,
-  TextInput,
-  StyleSheet,
-  ScrollView,
-  ActivityIndicator,
-  Alert,
-  TouchableWithoutFeedback,
-  Keyboard,
+  View, Text, StyleSheet, TouchableOpacity, TextInput,
+  ScrollView, KeyboardAvoidingView, Platform, Alert,
+  Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
-import { useWallet } from '../src/hooks/useWallet';
+import Animated, {
+  useSharedValue, useAnimatedStyle, withSpring, withTiming,
+  FadeIn, FadeInDown, SlideInRight, SlideOutLeft,
+  interpolate, Extrapolation,
+} from 'react-native-reanimated';
+import { useRouter } from 'expo-router';
+import Svg, { Path, Circle } from 'react-native-svg';
 import { useWalletStore } from '../src/stores/wallet-store';
+import { Colors, Spacing, Radius, Fonts } from '../constants/theme';
+import {
+  shortenAddress, isValidSolanaAddress, mockSendSOL, mockSendSKR, formatBalance
+} from '../utils/solana';
 
-const C = {
-  bg: '#0D0D12',
-  card: '#1A1A24',
-  purple: '#7C3AED',
-  green: '#14F195',
-  skr: '#9945FF',
-  border: 'rgba(124,58,237,0.25)',
-  text: '#FFFFFF',
-  sub: '#AAAAAA',
-  muted: '#555555',
-  red: '#EF4444',
+const { width: SW } = Dimensions.get('window');
+
+const BackIcon = () => (
+  <Svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+    <Path d="M19 12H5M12 5l-7 7 7 7" stroke={Colors.textPrimary} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+  </Svg>
+);
+
+const TokenTab = ({ token, selected, onPress }: { token: 'SOL' | 'SKR'; selected: boolean; onPress: () => void }) => {
+  const scale = useSharedValue(selected ? 1 : 0.97);
+  const animStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.8} style={{ flex: 1 }}>
+      <Animated.View style={[
+        styles.tokenTab,
+        selected && (token === 'SOL' ? styles.tokenTabActiveSol : styles.tokenTabActiveSkr),
+        animStyle,
+      ]}>
+        <Text style={[styles.tokenTabEmoji]}>{token === 'SOL' ? '◎' : '🔮'}</Text>
+        <Text style={[styles.tokenTabText, selected && { color: token === 'SOL' ? Colors.green : Colors.skrGold }]}>
+          {token}
+        </Text>
+        {selected && <View style={[styles.tokenTabDot, { backgroundColor: token === 'SOL' ? Colors.green : Colors.skrGold }]} />}
+      </Animated.View>
+    </TouchableOpacity>
+  );
 };
 
-export default function Send() {
+function ContactChip({ contact, onPress }: { contact: any; onPress: () => void }) {
+  const scale = useSharedValue(1);
+  const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+
+  return (
+    <TouchableOpacity
+      onPress={() => {
+        scale.value = withSpring(0.93, {}, () => { scale.value = withSpring(1); });
+        onPress();
+      }}
+      activeOpacity={0.8}
+    >
+      <Animated.View style={[styles.contactChip, animStyle]}>
+        <Text style={styles.contactEmoji}>{contact.emoji}</Text>
+        <Text style={styles.contactName} numberOfLines={1}>{contact.name.split(' ')[0]}</Text>
+      </Animated.View>
+    </TouchableOpacity>
+  );
+}
+
+// Number pad button
+function NumPadBtn({ label, onPress }: { label: string; onPress: () => void }) {
+  const scale = useSharedValue(1);
+  const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+
+  return (
+    <TouchableOpacity
+      onPress={() => {
+        scale.value = withSpring(0.88, { damping: 10 }, () => { scale.value = withSpring(1); });
+        onPress();
+      }}
+      activeOpacity={0.8}
+      style={{ flex: 1, aspectRatio: 1.3, maxHeight: 64 }}
+    >
+      <Animated.View style={[styles.numPadBtn, animStyle]}>
+        <Text style={styles.numPadText}>{label}</Text>
+      </Animated.View>
+    </TouchableOpacity>
+  );
+}
+
+export default function SendScreen() {
   const router = useRouter();
-  const { sendSOL } = useWallet();
-  const params = useLocalSearchParams<{ address?: string; amount?: string }>();
+  const { contacts, solBalance, skrBalance, publicKey, connected, addTransaction } = useWalletStore();
 
-  const isConnected = useWalletStore((s) => s.isConnected);
-  const balance = useWalletStore((s) => s.balance);
-
-  const [address, setAddress] = useState(params.address ?? '');
-  const [amount, setAmount] = useState(params.amount ?? '');
   const [token, setToken] = useState<'SOL' | 'SKR'>('SOL');
+  const [toAddress, setToAddress] = useState('');
+  const [amount, setAmount] = useState('');
   const [sending, setSending] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [txSignature, setTxSignature] = useState('');
+  const [selectedContact, setSelectedContact] = useState<any>(null);
 
-  const isValidAddress = address.length >= 32 && address.length <= 44;
-  const isValidAmount = parseFloat(amount) > 0 && !isNaN(parseFloat(amount));
-  const hasEnoughBalance = balance != null && parseFloat(amount) <= balance;
-  const canSend = isValidAddress && isValidAmount && hasEnoughBalance && isConnected;
-  const cameFromQR = !!params.address;
+  const isValidAddress = isValidSolanaAddress(toAddress) || toAddress.length === 0;
+  const hasAddress = toAddress.length > 0 && isValidSolanaAddress(toAddress);
+  const hasAmount = parseFloat(amount) > 0;
+  const canSend = connected && hasAddress && hasAmount && !sending;
+
+  const maxBalance = token === 'SOL' ? solBalance : skrBalance;
+
+  const handleNumPad = (val: string) => {
+    if (val === '⌫') {
+      setAmount(prev => prev.slice(0, -1));
+      return;
+    }
+    if (val === '.' && amount.includes('.')) return;
+    if (val === '.' && amount === '') { setAmount('0.'); return; }
+    const next = amount + val;
+    if (parseFloat(next) > maxBalance) return;
+    if (amount.includes('.') && amount.split('.')[1]?.length >= 6) return;
+    setAmount(next);
+  };
 
   const handleSend = async () => {
     if (!canSend) return;
     setSending(true);
     try {
-      const sig = await sendSOL(address, parseFloat(amount));
-      setTxSignature(sig?.toString() ?? '');
-      setSuccess(true);
-    } catch (error: any) {
-      Alert.alert(
-        'Transaction Failed',
-        error?.message ?? 'Something went wrong. Please try again.'
-      );
+      const result = token === 'SOL'
+        ? await mockSendSOL(publicKey!, toAddress, parseFloat(amount))
+        : await mockSendSKR(publicKey!, toAddress, parseFloat(amount));
+
+      const newTx = {
+        id: Date.now().toString(),
+        type: 'sent' as const,
+        token,
+        amount,
+        address: toAddress,
+        label: selectedContact?.name,
+        timestamp: new Date(),
+        status: result.status,
+        txSignature: result.signature,
+      };
+      addTransaction(newTx);
+
+      router.push({
+        pathname: '/confirm',
+        params: {
+          status: result.status,
+          amount,
+          token,
+          toAddress: shortenAddress(toAddress),
+          toAddressFull: toAddress,
+          txSignature: result.signature,
+          label: selectedContact?.name || '',
+        }
+      });
+    } catch (err) {
+      Alert.alert('Error', 'Transaction failed. Please try again.');
     } finally {
       setSending(false);
     }
   };
 
-  // ── SUCCESS SCREEN ──
-  if (success) {
-    return (
-      <SafeAreaView style={s.safe}>
-        <View style={s.successContainer}>
-          <View style={s.successIconBox}>
-            <Ionicons name="checkmark" size={56} color={C.green} />
-          </View>
-          <Text style={s.successTitle}>Sent! 🎉</Text>
-          <Text style={s.successAmount}>
-            {amount} <Text style={s.successToken}>{token}</Text>
-          </Text>
-          <Text style={s.successTo}>To</Text>
-          <Text style={s.successAddr}>
-            {address.slice(0, 8)}...{address.slice(-8)}
-          </Text>
-          {txSignature ? (
-            <TouchableOpacity style={s.explorerBtn}>
-              <Ionicons name="open-outline" size={16} color={C.purple} />
-              <Text style={s.explorerBtnText}>View on Solscan</Text>
-            </TouchableOpacity>
-          ) : null}
-          <TouchableOpacity style={s.doneBtn} onPress={() => router.back()}>
-            <Text style={s.doneBtnText}>Back to Home</Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  const handleSelectContact = (c: any) => {
+    setSelectedContact(c);
+    setToAddress(c.address);
+  };
 
-  // ── SEND SCREEN ──
   return (
-    <SafeAreaView style={s.safe}>
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <View style={s.container}>
+    <View style={styles.container}>
+      <SafeAreaView style={{ flex: 1 }} edges={['top']}>
+        {/* Header */}
+        <Animated.View entering={FadeIn.duration(300)} style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
+            <BackIcon />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Send Payment</Text>
+          <View style={{ width: 40 }} />
+        </Animated.View>
 
-          {/* HEADER */}
-          <View style={s.header}>
-            <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
-              <Ionicons name="chevron-down" size={24} color={C.text} />
-            </TouchableOpacity>
-            <Text style={s.title}>Send</Text>
-            <View style={{ width: 40 }} />
-          </View>
-
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+          keyboardVerticalOffset={0}
+        >
           <ScrollView
             showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.scroll}
             keyboardShouldPersistTaps="handled"
-            contentContainerStyle={s.scrollContent}
           >
-            {/* QR SCANNED BANNER — only shows when coming from QR scan */}
-            {cameFromQR && isValidAddress && (
-              <View style={s.scannedBanner}>
-                <View style={s.scannedBannerLeft}>
-                  <Ionicons name="checkmark-circle" size={20} color={C.green} />
-                  <Text style={s.scannedBannerText}>Address fetched from QR</Text>
+            {/* Token selector */}
+            <Animated.View entering={FadeInDown.delay(100).duration(300)} style={styles.tokenRow}>
+              <TokenTab token="SOL" selected={token === 'SOL'} onPress={() => setToken('SOL')} />
+              <TokenTab token="SKR" selected={token === 'SKR'} onPress={() => setToken('SKR')} />
+            </Animated.View>
+
+            {/* Balance indicator */}
+            <Animated.View entering={FadeInDown.delay(150).duration(300)} style={styles.balanceRow}>
+              <Text style={styles.balanceLabel}>Available:</Text>
+              <Text style={[styles.balanceVal, { color: token === 'SOL' ? Colors.green : Colors.skrGold }]}>
+                {formatBalance(maxBalance)} {token}
+              </Text>
+            </Animated.View>
+
+            {/* To address */}
+            <Animated.View entering={FadeInDown.delay(200).duration(300)} style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>To</Text>
+              <View style={[styles.inputWrap, !isValidAddress && styles.inputError]}>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Wallet address or scan QR"
+                  placeholderTextColor={Colors.textMuted}
+                  value={toAddress}
+                  onChangeText={t => { setToAddress(t); setSelectedContact(null); }}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  multiline
+                />
+                <TouchableOpacity
+                  onPress={() => router.push('/(tabs)/scan')}
+                  style={styles.scanBtn}
+                  activeOpacity={0.7}
+                >
+                  <Text style={{ fontSize: 20 }}>⊞</Text>
+                </TouchableOpacity>
+              </View>
+              {!isValidAddress && toAddress.length > 0 && (
+                <Text style={styles.errorText}>Invalid Solana address</Text>
+              )}
+            </Animated.View>
+
+            {/* Recent contacts */}
+            <Animated.View entering={FadeInDown.delay(250).duration(300)}>
+              <Text style={styles.inputLabel}>Recent</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.contactScroll}>
+                {contacts.map(c => (
+                  <ContactChip key={c.id} contact={c} onPress={() => handleSelectContact(c)} />
+                ))}
+              </ScrollView>
+            </Animated.View>
+
+            {/* Amount display */}
+            <Animated.View entering={FadeInDown.delay(300).duration(300)} style={styles.amountDisplay}>
+              <Text style={styles.amountText}>
+                {amount || '0'}
+                <Text style={[styles.amountToken, { color: token === 'SOL' ? Colors.green : Colors.skrGold }]}>
+                  {' '}{token}
+                </Text>
+              </Text>
+              {amount && parseFloat(amount) > 0 && token === 'SOL' && (
+                <Text style={styles.amountUSD}>
+                  ≈ ${(parseFloat(amount) * 148.23).toFixed(2)} USD
+                </Text>
+              )}
+              <TouchableOpacity onPress={() => setAmount(formatBalance(maxBalance * 0.99, 4))}>
+                <Text style={styles.maxBtn}>MAX</Text>
+              </TouchableOpacity>
+            </Animated.View>
+
+            {/* Number pad */}
+            <Animated.View entering={FadeInDown.delay(350).duration(300)} style={styles.numPad}>
+              {[
+                ['1','2','3'],
+                ['4','5','6'],
+                ['7','8','9'],
+                ['.','0','⌫'],
+              ].map((row, ri) => (
+                <View key={ri} style={styles.numRow}>
+                  {row.map(k => (
+                    <NumPadBtn key={k} label={k} onPress={() => handleNumPad(k)} />
+                  ))}
                 </View>
-                <Text style={s.scannedBannerAddr}>
-                  {address.slice(0, 6)}...{address.slice(-6)}
-                </Text>
-              </View>
-            )}
-
-            {/* NOT CONNECTED WARNING */}
-            {!isConnected && (
-              <View style={s.warningBox}>
-                <Ionicons name="warning-outline" size={18} color="#F59E0B" />
-                <Text style={s.warningText}>
-                  Connect your wallet first to send SOL
-                </Text>
-              </View>
-            )}
-
-            {/* TOKEN TOGGLE */}
-            <View style={s.tokenToggle}>
-              {(['SOL', 'SKR'] as const).map((t) => (
-                <TouchableOpacity
-                  key={t}
-                  style={[
-                    s.tokenBtn,
-                    token === t && s.tokenBtnActive,
-                    token === t && t === 'SKR' && s.tokenBtnSKR,
-                  ]}
-                  onPress={() => setToken(t)}
-                >
-                  <Text style={[s.tokenBtnText, token === t && s.tokenBtnTextActive]}>
-                    {t}
-                  </Text>
-                </TouchableOpacity>
               ))}
-            </View>
+            </Animated.View>
 
-            {/* AMOUNT INPUT */}
-            <View style={s.amountBox}>
-              <TextInput
-                style={s.amountInput}
-                value={amount}
-                onChangeText={(text) => {
-                  const cleaned = text.replace(/[^0-9.]/g, '');
-                  const parts = cleaned.split('.');
-                  if (parts.length <= 2) setAmount(cleaned);
-                }}
-                placeholder="0.00"
-                placeholderTextColor={C.muted}
-                keyboardType="decimal-pad"
-                textAlign="center"
-                returnKeyType="done"
-                onSubmitEditing={Keyboard.dismiss}
-              />
-              <Text style={s.amountToken}>{token}</Text>
-              <Text style={s.balanceHint}>
-                Available: {balance != null ? (balance ?? 0).toFixed(4) : '0.0000'} SOL
-              </Text>
-            </View>
-
-            {/* QUICK AMOUNTS */}
-            <View style={s.quickRow}>
-              {['0.01', '0.05', '0.1', '0.5'].map((v) => (
-                <TouchableOpacity
-                  key={v}
-                  style={[s.quickBtn, amount === v && s.quickBtnActive]}
-                  onPress={() => {
-                    setAmount(v);
-                    Keyboard.dismiss();
-                  }}
-                >
-                  <Text style={[s.quickBtnText, amount === v && s.quickBtnTextActive]}>
-                    {v}
+            {/* Send button */}
+            <Animated.View entering={FadeInDown.delay(400).duration(300)}>
+              <TouchableOpacity
+                style={[
+                  styles.sendBtn,
+                  canSend ? styles.sendBtnActive : styles.sendBtnDisabled,
+                  token === 'SKR' && canSend && styles.sendBtnSKR,
+                ]}
+                onPress={handleSend}
+                disabled={!canSend}
+                activeOpacity={0.85}
+              >
+                {sending ? (
+                  <Text style={styles.sendBtnText}>Sending...</Text>
+                ) : (
+                  <Text style={styles.sendBtnText}>
+                    {connected ? `Send ${token}` : 'Connect Wallet First'}
                   </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+                )}
+              </TouchableOpacity>
+            </Animated.View>
 
-            {/* ADDRESS INPUT */}
-            <Text style={s.inputLabelText}>Recipient Address</Text>
-            <View style={[
-              s.inputBox,
-              address.length > 0 && !isValidAddress && s.inputBoxError,
-              address.length > 0 && isValidAddress && s.inputBoxSuccess,
-            ]}>
-              <Ionicons name="wallet-outline" size={18} color={C.muted} />
-              <TextInput
-                style={s.input}
-                value={address}
-                onChangeText={setAddress}
-                placeholder="Enter Solana wallet address"
-                placeholderTextColor={C.muted}
-                autoCapitalize="none"
-                autoCorrect={false}
-                returnKeyType="done"
-                onSubmitEditing={Keyboard.dismiss}
-              />
-              {address.length > 0 && (
-                <TouchableOpacity onPress={() => setAddress('')}>
-                  <Ionicons name="close-circle" size={18} color={C.muted} />
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {/* ERRORS */}
-            {address.length > 0 && !isValidAddress && (
-              <Text style={s.errorText}>Invalid Solana address</Text>
-            )}
-            {amount.length > 0 && isValidAmount && balance != null && !hasEnoughBalance && (
-              <Text style={s.errorText}>
-                Insufficient balance. You have {(balance ?? 0).toFixed(4)} SOL
-              </Text>
-            )}
-
-            <Text style={s.fee}>Network fee: ~0.000005 SOL</Text>
-
-            {/* SEND BUTTON */}
-            <TouchableOpacity
-              style={[s.sendBtn, !canSend && s.sendBtnDisabled]}
-              onPress={handleSend}
-              disabled={!canSend || sending}
-            >
-              {sending ? (
-                <>
-                  <ActivityIndicator size="small" color="#fff" />
-                  <Text style={s.sendBtnText}>Sending...</Text>
-                </>
-              ) : (
-                <>
-                  <Ionicons name="arrow-up-circle-outline" size={22} color="#fff" />
-                  <Text style={s.sendBtnText}>
-                    Send {amount || '0'} {token}
-                  </Text>
-                </>
-              )}
-            </TouchableOpacity>
-
+            <View style={{ height: 40 }} />
           </ScrollView>
-        </View>
-      </TouchableWithoutFeedback>
-    </SafeAreaView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </View>
   );
 }
 
-const s = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: C.bg,
-  },
-  container: {
-    flex: 1,
-  },
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: Colors.bg },
+  scroll: { paddingHorizontal: Spacing.screen, paddingTop: 8 },
+
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 8,
+    paddingHorizontal: Spacing.screen,
+    paddingVertical: 12,
   },
   backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: C.card,
-    justifyContent: 'center',
-    alignItems: 'center',
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: Colors.bgCard,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: Colors.border,
   },
-  title: {
-    color: C.text,
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  scrollContent: {
-    paddingHorizontal: 20,
-    paddingBottom: 40,
-  },
-  scannedBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: 'rgba(20,241,149,0.1)',
-    borderRadius: 12,
-    padding: 12,
+  headerTitle: { fontSize: 18, fontWeight: '700', color: Colors.textPrimary },
+
+  // Token tabs
+  tokenRow: {
+    flexDirection: 'row', gap: 10,
+    backgroundColor: Colors.bgCard,
+    borderRadius: Radius.lg,
+    padding: 5,
     marginBottom: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(20,241,149,0.3)',
   },
-  scannedBannerLeft: {
-    flexDirection: 'row',
+  tokenTab: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 10, gap: 6,
+    borderRadius: Radius.md,
+  },
+  tokenTabActiveSol: {
+    backgroundColor: Colors.greenDim,
+    borderWidth: 1, borderColor: Colors.greenBorder,
+  },
+  tokenTabActiveSkr: {
+    backgroundColor: Colors.skrGoldDim,
+    borderWidth: 1, borderColor: Colors.skrGoldBorder,
+  },
+  tokenTabEmoji: { fontSize: 16 },
+  tokenTabText: { fontSize: 15, fontWeight: '700', color: Colors.textSecondary },
+  tokenTabDot: { width: 5, height: 5, borderRadius: 3 },
+
+  balanceRow: {
+    flexDirection: 'row', gap: 6, alignItems: 'center',
+    marginBottom: 16, justifyContent: 'flex-end',
+  },
+  balanceLabel: { fontSize: 12, color: Colors.textMuted },
+  balanceVal: { fontSize: 13, fontWeight: '700' },
+
+  // Input
+  inputGroup: { marginBottom: 16 },
+  inputLabel: { fontSize: 12, color: Colors.textMuted, fontWeight: '600', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.8 },
+  inputWrap: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: Colors.bgInput,
+    borderRadius: Radius.lg,
+    borderWidth: 1, borderColor: Colors.border,
+    paddingHorizontal: 14, paddingVertical: 4,
+    minHeight: 52,
+  },
+  inputError: { borderColor: Colors.error },
+  input: { flex: 1, color: Colors.textPrimary, fontSize: 13, fontFamily: 'monospace', paddingVertical: 8 },
+  scanBtn: { paddingLeft: 10 },
+  errorText: { fontSize: 11, color: Colors.error, marginTop: 4, marginLeft: 4 },
+
+  contactScroll: { marginBottom: 20 },
+  contactChip: {
+    alignItems: 'center', marginRight: 12,
+    backgroundColor: Colors.bgCard,
+    borderRadius: Radius.lg,
+    paddingHorizontal: 14, paddingVertical: 10,
+    borderWidth: 1, borderColor: Colors.border,
+    minWidth: 64,
+  },
+  contactEmoji: { fontSize: 22, marginBottom: 4 },
+  contactName: { fontSize: 11, color: Colors.textSecondary, fontWeight: '600' },
+
+  // Amount
+  amountDisplay: {
     alignItems: 'center',
-    gap: 8,
-  },
-  scannedBannerText: {
-    color: C.green,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  scannedBannerAddr: {
-    color: C.green,
-    fontSize: 13,
-    fontFamily: 'monospace',
-  },
-  warningBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: 'rgba(245,158,11,0.1)',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(245,158,11,0.3)',
-  },
-  warningText: {
-    color: '#F59E0B',
-    fontSize: 13,
-    flex: 1,
-  },
-  tokenToggle: {
-    flexDirection: 'row',
-    backgroundColor: C.card,
-    borderRadius: 16,
-    padding: 4,
-    marginBottom: 24,
-    borderWidth: 1,
-    borderColor: C.border,
-  },
-  tokenBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  tokenBtnActive: {
-    backgroundColor: C.purple,
-  },
-  tokenBtnSKR: {
-    backgroundColor: C.skr,
-  },
-  tokenBtnText: {
-    color: C.muted,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  tokenBtnTextActive: {
-    color: '#fff',
-  },
-  amountBox: {
-    alignItems: 'center',
-    marginBottom: 20,
-    backgroundColor: C.card,
-    borderRadius: 20,
-    padding: 24,
-    borderWidth: 1,
-    borderColor: C.border,
-  },
-  amountInput: {
-    color: C.text,
-    fontSize: 56,
-    fontWeight: 'bold',
-    letterSpacing: -2,
-    minWidth: 150,
-    textAlign: 'center',
-  },
-  amountToken: {
-    color: C.sub,
-    fontSize: 18,
-    marginTop: 4,
-  },
-  balanceHint: {
-    color: C.muted,
-    fontSize: 13,
-    marginTop: 8,
-  },
-  quickRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 24,
-  },
-  quickBtn: {
-    flex: 1,
-    backgroundColor: C.card,
-    borderRadius: 12,
-    paddingVertical: 10,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: C.border,
-  },
-  quickBtnActive: {
-    backgroundColor: C.purple,
-    borderColor: C.purple,
-  },
-  quickBtnText: {
-    color: C.sub,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  quickBtnTextActive: {
-    color: '#fff',
-  },
-  inputLabelText: {
-    color: C.sub,
-    fontSize: 13,
-    fontWeight: '500',
-    marginBottom: 8,
-  },
-  inputBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: C.card,
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderWidth: 1,
-    borderColor: C.border,
-    gap: 10,
-    marginBottom: 6,
-  },
-  inputBoxError: {
-    borderColor: C.red,
-  },
-  inputBoxSuccess: {
-    borderColor: C.green,
-  },
-  input: {
-    flex: 1,
-    color: C.text,
-    fontSize: 14,
-  },
-  errorText: {
-    color: C.red,
-    fontSize: 12,
-    marginBottom: 8,
-    marginLeft: 4,
-  },
-  fee: {
-    color: C.muted,
-    fontSize: 12,
-    textAlign: 'center',
-    marginTop: 4,
-    marginBottom: 24,
-  },
-  sendBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    backgroundColor: C.purple,
-    borderRadius: 18,
-    paddingVertical: 18,
-    marginTop: 8,
-  },
-  sendBtnDisabled: {
-    opacity: 0.4,
-  },
-  sendBtnText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  successContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 32,
-    gap: 12,
-  },
-  successIconBox: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
-    backgroundColor: 'rgba(20,241,149,0.15)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: C.green,
-    marginBottom: 8,
-  },
-  successTitle: {
-    color: C.text,
-    fontSize: 32,
-    fontWeight: 'bold',
-  },
-  successAmount: {
-    color: C.green,
-    fontSize: 40,
-    fontWeight: 'bold',
-  },
-  successToken: {
-    color: C.green,
-    fontSize: 24,
-  },
-  successTo: {
-    color: C.muted,
-    fontSize: 14,
-  },
-  successAddr: {
-    color: C.sub,
-    fontSize: 14,
-    fontFamily: 'monospace',
-  },
-  explorerBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: C.purple,
-    marginTop: 8,
-  },
-  explorerBtnText: {
-    color: C.purple,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  doneBtn: {
-    backgroundColor: C.purple,
-    paddingHorizontal: 40,
     paddingVertical: 16,
-    borderRadius: 16,
-    marginTop: 8,
+    marginBottom: 8,
   },
-  doneBtnText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
+  amountText: {
+    fontSize: 52, fontWeight: '800',
+    color: Colors.textPrimary,
+    letterSpacing: -2,
   },
+  amountToken: { fontSize: 24, fontWeight: '600' },
+  amountUSD: { fontSize: 14, color: Colors.textSecondary, marginTop: 4 },
+  maxBtn: {
+    fontSize: 12, color: Colors.green, fontWeight: '700',
+    marginTop: 8, paddingHorizontal: 12, paddingVertical: 4,
+    backgroundColor: Colors.greenDim, borderRadius: Radius.full,
+    borderWidth: 1, borderColor: Colors.greenBorder,
+  },
+
+  // Numpad
+  numPad: { marginBottom: 20 },
+  numRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
+  numPadBtn: {
+    flex: 1, aspectRatio: 1.3, maxHeight: 64,
+    backgroundColor: Colors.bgCard,
+    borderRadius: Radius.lg,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  numPadText: { fontSize: 22, fontWeight: '600', color: Colors.textPrimary },
+
+  // Send button
+  sendBtn: {
+    height: 58, borderRadius: Radius.full,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  sendBtnActive: { backgroundColor: Colors.green },
+  sendBtnSKR: { backgroundColor: Colors.skrGold },
+  sendBtnDisabled: { backgroundColor: Colors.bgCard, borderWidth: 1, borderColor: Colors.border },
+  sendBtnText: { fontSize: 17, fontWeight: '700', color: Colors.bg },
 });

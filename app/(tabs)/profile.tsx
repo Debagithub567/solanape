@@ -1,134 +1,118 @@
-import { View, Text, TouchableOpacity, StyleSheet, Switch } from 'react-native';
+import React from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
-import { useState } from 'react';
+import Animated, { FadeInDown } from 'react-native-reanimated';
+import { useWalletStore } from '../../../src/stores/wallet-store';
+import { Colors, Spacing, Radius } from '../../constants/theme';
+import { shortenAddress } from '../../utils/solana';
 
-const C = { bg: '#0D0D12', card: '#1A1A24', purple: '#7C3AED', green: '#14F195', border: 'rgba(124,58,237,0.25)', text: '#FFFFFF', sub: '#AAAAAA', muted: '#555555' };
+const ALERTS = [
+  { id: '1', emoji: '⚡', title: 'Transaction Confirmed', sub: 'Sent 0.5 SOL to Rahul Dev', time: '10m ago', color: Colors.green },
+  { id: '2', emoji: '💰', title: 'Received SKR', sub: 'Got 100 SKR from Priya Singh', time: '45m ago', color: Colors.skrGold },
+  { id: '3', emoji: '🔮', title: 'Seeker Network', sub: 'SKR token integration active', time: '2h ago', color: Colors.purple },
+  { id: '4', emoji: '🚀', title: 'Devnet Active', sub: 'You\'re connected to Solana devnet', time: '3h ago', color: Colors.blue },
+];
 
-export default function Profile() {
-  const [vendorMode, setVendorMode] = useState(false);
-  const address = '7xKp9mNqRtWzXpLmQsVbDfGhJkNoPqRs';
-  const short = `${address.slice(0, 8)}...${address.slice(-8)}`;
+export default function ProfileScreen() {
+  const { connected, publicKey, solBalance, skrBalance, disconnect, connect } = useWalletStore();
 
   return (
-    <SafeAreaView style={s.safe}>
-      <View style={s.header}>
-        <Text style={s.title}>Wallet</Text>
-      </View>
+    <View style={styles.container}>
+      <SafeAreaView style={{ flex: 1 }} edges={['top']}>
+        <Animated.View entering={FadeInDown.duration(300)} style={styles.header}>
+          <Text style={styles.title}>Alerts</Text>
+          <Text style={styles.sub}>Activity & Notifications</Text>
+        </Animated.View>
 
-      {/* Wallet card */}
-      <View style={s.walletCard}>
-        <View style={s.avatarRow}>
-          <View style={s.avatar}>
-            <Ionicons name="person-outline" size={32} color={C.purple} />
-          </View>
-          <View>
-            <Text style={s.walletLabel}>Connected Wallet</Text>
-            <Text style={s.walletAddr}>{short}</Text>
-          </View>
-        </View>
-        <View style={s.walletActions}>
-          <TouchableOpacity style={s.walletBtn}>
-            <Ionicons name="copy-outline" size={16} color={C.text} />
-            <Text style={s.walletBtnText}>Copy Address</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={s.walletBtn}>
-            <Ionicons name="share-outline" size={16} color={C.text} />
-            <Text style={s.walletBtnText}>Share</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
+          {/* Wallet card */}
+          <Animated.View entering={FadeInDown.delay(100).duration(300)} style={styles.walletCard}>
+            <View style={styles.walletCardTop}>
+              <View>
+                <Text style={styles.walletLabel}>My Wallet</Text>
+                <Text style={styles.walletAddr}>{publicKey ? shortenAddress(publicKey, 8) : 'Not connected'}</Text>
+              </View>
+              <View style={[styles.statusPill, { backgroundColor: connected ? Colors.greenDim : 'rgba(255,77,109,0.1)', borderColor: connected ? Colors.greenBorder : 'rgba(255,77,109,0.25)' }]}>
+                <View style={[styles.statusDot, { backgroundColor: connected ? Colors.green : Colors.error }]} />
+                <Text style={[styles.statusText, { color: connected ? Colors.green : Colors.error }]}>
+                  {connected ? 'Connected' : 'Offline'}
+                </Text>
+              </View>
+            </View>
+            {connected && (
+              <View style={styles.balancesRow}>
+                <View style={styles.balancePill}>
+                  <Text style={styles.balancePillVal}>{solBalance} SOL</Text>
+                </View>
+                <View style={[styles.balancePill, { borderColor: Colors.skrGoldBorder, backgroundColor: Colors.skrGoldDim }]}>
+                  <Text style={[styles.balancePillVal, { color: Colors.skrGold }]}>{skrBalance} SKR</Text>
+                </View>
+              </View>
+            )}
+          </Animated.View>
 
-      {/* Settings list */}
-      <View style={s.settingsList}>
+          {/* Alerts */}
+          <Text style={styles.sectionTitle}>Recent Activity</Text>
+          {ALERTS.map((alert, i) => (
+            <Animated.View key={alert.id} entering={FadeInDown.delay(150 + i * 60).duration(280)}>
+              <TouchableOpacity style={styles.alertRow} activeOpacity={0.8}>
+                <View style={[styles.alertIcon, { backgroundColor: `${alert.color}15` }]}>
+                  <Text style={{ fontSize: 20 }}>{alert.emoji}</Text>
+                </View>
+                <View style={styles.alertInfo}>
+                  <Text style={styles.alertTitle}>{alert.title}</Text>
+                  <Text style={styles.alertSub}>{alert.sub}</Text>
+                </View>
+                <Text style={styles.alertTime}>{alert.time}</Text>
+              </TouchableOpacity>
+            </Animated.View>
+          ))}
 
-        {/* Vendor Mode toggle */}
-        <View style={s.settingRow}>
-          <View style={s.settingLeft}>
-            <View style={[s.settingIcon, { backgroundColor: 'rgba(245,158,11,0.15)' }]}>
-              <Ionicons name="storefront-outline" size={20} color="#F59E0B" />
-            </View>
-            <View>
-              <Text style={s.settingTitle}>Vendor Mode</Text>
-              <Text style={s.settingDesc}>Show payment QR to receive</Text>
-            </View>
-          </View>
-          <Switch
-            value={vendorMode}
-            onValueChange={setVendorMode}
-            trackColor={{ false: '#333', true: C.purple }}
-            thumbColor={vendorMode ? C.green : '#888'}
-          />
-        </View>
-
-        <TouchableOpacity style={s.settingRow}>
-          <View style={s.settingLeft}>
-            <View style={[s.settingIcon, { backgroundColor: 'rgba(20,241,149,0.15)' }]}>
-              <Ionicons name="globe-outline" size={20} color={C.green} />
-            </View>
-            <View>
-              <Text style={s.settingTitle}>Network</Text>
-              <Text style={s.settingDesc}>Devnet</Text>
-            </View>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color={C.muted} />
-        </TouchableOpacity>
-
-        <TouchableOpacity style={s.settingRow}>
-          <View style={s.settingLeft}>
-            <View style={[s.settingIcon, { backgroundColor: 'rgba(124,58,237,0.15)' }]}>
-              <Ionicons name="shield-checkmark-outline" size={20} color={C.purple} />
-            </View>
-            <View>
-              <Text style={s.settingTitle}>Security</Text>
-              <Text style={s.settingDesc}>Seed Vault enabled</Text>
-            </View>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color={C.muted} />
-        </TouchableOpacity>
-
-        <TouchableOpacity style={[s.settingRow, { borderBottomWidth: 0 }]}>
-          <View style={s.settingLeft}>
-            <View style={[s.settingIcon, { backgroundColor: 'rgba(239,68,68,0.15)' }]}>
-              <Ionicons name="log-out-outline" size={20} color="#EF4444" />
-            </View>
-            <Text style={[s.settingTitle, { color: '#EF4444' }]}>Disconnect Wallet</Text>
-          </View>
-        </TouchableOpacity>
-      </View>
-
-      {/* Vendor dashboard — shown when vendor mode ON */}
-      {vendorMode && (
-        <View style={s.vendorCard}>
-          <Text style={s.vendorTitle}>📊 Today's Earnings</Text>
-          <Text style={s.vendorAmount}>0.35 SOL</Text>
-          <Text style={s.vendorSub}>4 payments received today</Text>
-        </View>
-      )}
-    </SafeAreaView>
+          <View style={{ height: 80 }} />
+        </ScrollView>
+      </SafeAreaView>
+    </View>
   );
 }
 
-const s = StyleSheet.create({
-  safe:          { flex: 1, backgroundColor: C.bg },
-  header:        { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16 },
-  title:         { color: C.text, fontSize: 24, fontWeight: 'bold' },
-  walletCard:    { marginHorizontal: 20, backgroundColor: C.card, borderRadius: 20, padding: 20, borderWidth: 1, borderColor: C.border, marginBottom: 20 },
-  avatarRow:     { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 16 },
-  avatar:        { width: 56, height: 56, borderRadius: 28, backgroundColor: 'rgba(124,58,237,0.15)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: C.border },
-  walletLabel:   { color: C.sub, fontSize: 12, marginBottom: 4 },
-  walletAddr:    { color: C.text, fontSize: 14, fontFamily: 'monospace', fontWeight: '600' },
-  walletActions: { flexDirection: 'row', gap: 10 },
-  walletBtn:     { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#0D0D12', borderRadius: 12, paddingVertical: 10, borderWidth: 1, borderColor: C.border },
-  walletBtnText: { color: C.text, fontSize: 13, fontWeight: '500' },
-  settingsList:  { marginHorizontal: 20, backgroundColor: C.card, borderRadius: 20, borderWidth: 1, borderColor: C.border, overflow: 'hidden' },
-  settingRow:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)' },
-  settingLeft:   { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  settingIcon:   { width: 38, height: 38, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
-  settingTitle:  { color: C.text, fontSize: 15, fontWeight: '600' },
-  settingDesc:   { color: C.muted, fontSize: 12, marginTop: 2 },
-  vendorCard:    { marginHorizontal: 20, marginTop: 16, backgroundColor: 'rgba(245,158,11,0.1)', borderRadius: 20, padding: 20, borderWidth: 1, borderColor: 'rgba(245,158,11,0.3)', alignItems: 'center' },
-  vendorTitle:   { color: C.text, fontSize: 16, fontWeight: '700', marginBottom: 8 },
-  vendorAmount:  { color: '#F59E0B', fontSize: 36, fontWeight: 'bold' },
-  vendorSub:     { color: C.sub, fontSize: 13, marginTop: 4 },
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: Colors.bg },
+  scroll: { paddingHorizontal: Spacing.screen },
+  header: { paddingHorizontal: Spacing.screen, paddingTop: 12, paddingBottom: 16 },
+  title: { fontSize: 26, fontWeight: '800', color: Colors.textPrimary },
+  sub: { fontSize: 13, color: Colors.textSecondary, marginTop: 2 },
+
+  walletCard: {
+    backgroundColor: Colors.bgCard, borderRadius: Radius.xl,
+    borderWidth: 1, borderColor: Colors.border,
+    padding: 18, marginBottom: 24,
+  },
+  walletCardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  walletLabel: { fontSize: 12, color: Colors.textMuted, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.8 },
+  walletAddr: { fontSize: 14, color: Colors.textSecondary, fontFamily: 'monospace', marginTop: 3 },
+  statusPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 10, paddingVertical: 5, borderRadius: Radius.full,
+    borderWidth: 1,
+  },
+  statusDot: { width: 6, height: 6, borderRadius: 3 },
+  statusText: { fontSize: 12, fontWeight: '700' },
+  balancesRow: { flexDirection: 'row', gap: 8 },
+  balancePill: {
+    paddingHorizontal: 12, paddingVertical: 6, borderRadius: Radius.full,
+    backgroundColor: Colors.greenDim, borderWidth: 1, borderColor: Colors.greenBorder,
+  },
+  balancePillVal: { fontSize: 13, fontWeight: '700', color: Colors.green },
+
+  sectionTitle: { fontSize: 13, color: Colors.textMuted, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 12 },
+
+  alertRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: Colors.border,
+  },
+  alertIcon: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
+  alertInfo: { flex: 1 },
+  alertTitle: { fontSize: 14, fontWeight: '700', color: Colors.textPrimary },
+  alertSub: { fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
+  alertTime: { fontSize: 11, color: Colors.textMuted },
 });

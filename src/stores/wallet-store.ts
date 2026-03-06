@@ -1,106 +1,126 @@
-import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { create } from 'zustand';
 
-interface WalletState {
-  publicKey: string | null;
-  balance: number | null;
-  lastBalance: number | null;
-  lastConnectedTime: string | null;
-  isConnected: boolean;
-  favorites: string[];
-  searchHistory: string[];
-  isDevnet: boolean;
-
-  setConnected: (publicKey: string, balance: number) => void;
-  setBalance: (balance: number) => void;
-  setDisconnected: () => void;
-  addFavorite: (address: string) => void;
-  removeFavorite: (address: string) => void;
-  isFavorite: (address: string) => boolean;
-  addToHistory: (address: string) => void;
-  clearHistory: () => void;
-  toggleNetwork: () => void;
+export interface Transaction {
+  id: string;
+  type: 'sent' | 'received';
+  token: 'SOL' | 'SKR';
+  amount: string;
+  address: string;
+  label?: string;
+  timestamp: Date;
+  status: 'confirmed' | 'pending' | 'failed';
+  txSignature?: string;
 }
 
-export const useWalletStore = create<WalletState>()(
-  persist(
-    (set, get) => ({
-      publicKey: null,
-      balance: null,
-      lastBalance: null,
-      lastConnectedTime: null,
-      isConnected: false,
-      favorites: [],
-      searchHistory: [],
-      isDevnet: true,
+export interface Contact {
+  id: string;
+  name: string;
+  address: string;
+  emoji: string;
+  lastUsed?: Date;
+}
 
-      setConnected: (publicKey, balance) =>
-        set({
-          publicKey,
-          balance,
-          isConnected: true,
-          lastBalance: balance,
-          lastConnectedTime: new Date().toLocaleTimeString(),
-        }),
+interface WalletStore {
+  // Wallet state
+  connected: boolean;
+  publicKey: string | null;
+  solBalance: number;
+  skrBalance: number;
+  solPriceUSD: number;
 
-      setBalance: (balance) =>
-        set({
-          balance,
-          lastBalance: balance,
-        }),
+  // Transactions
+  transactions: Transaction[];
 
-      setDisconnected: () =>
-        set((state) => ({
-          publicKey: null,
-          balance: null,
-          isConnected: false,
-          lastBalance: state.balance ?? state.lastBalance,
-          lastConnectedTime: new Date().toLocaleTimeString(),
-        })),
+  // Contacts
+  contacts: Contact[];
 
-      addFavorite: (address) =>
-        set((state) => ({
-          favorites: state.favorites.includes(address)
-            ? state.favorites
-            : [address, ...state.favorites],
-        })),
+  // Actions
+  connect: (publicKey: string) => void;
+  disconnect: () => void;
+  setSolBalance: (bal: number) => void;
+  setSkrBalance: (bal: number) => void;
+  addTransaction: (tx: Transaction) => void;
+  updateTxStatus: (id: string, status: Transaction['status']) => void;
+}
 
-      removeFavorite: (address) =>
-        set((state) => ({
-          favorites: state.favorites.filter((a) => a !== address),
-        })),
+// Mock contacts
+const MOCK_CONTACTS: Contact[] = [
+  { id: '1', name: 'Rahul Dev', address: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU', emoji: '👨‍💻', lastUsed: new Date() },
+  { id: '2', name: 'Priya Singh', address: 'BQcdHdAQW1hcGapkqMTurdqe5WxirieC3APjTFGBFGSZ', emoji: '👩‍🎨' },
+  { id: '3', name: 'Arjun SOL', address: 'DRpbCBMxVnDK7maPM5tGv6MvB3v1sRMC86PZ8okm21hy', emoji: '🧑‍🚀' },
+  { id: '4', name: 'Merchant QR', address: 'HN7cABqLq46Es1jh92dQQisAq662SmxELLLsHHe4YWrH', emoji: '🏪' },
+  { id: '5', name: 'Seeker Team', address: 'So1ana111111111111111111111111111111111111111', emoji: '🔮' },
+];
 
-      isFavorite: (address) => get().favorites.includes(address),
+// Mock transactions
+const MOCK_TXS: Transaction[] = [
+  {
+    id: '1', type: 'sent', token: 'SOL', amount: '0.5',
+    address: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
+    label: 'Rahul Dev', timestamp: new Date(Date.now() - 1000 * 60 * 10),
+    status: 'confirmed', txSignature: '5KG9mPwN3nQ2vXtJhL8RcYsB1dA4eZfMo6uTkWpViCg7nE'
+  },
+  {
+    id: '2', type: 'received', token: 'SKR', amount: '100',
+    address: 'BQcdHdAQW1hcGapkqMTurdqe5WxirieC3APjTFGBFGSZ',
+    label: 'Priya Singh', timestamp: new Date(Date.now() - 1000 * 60 * 45),
+    status: 'confirmed', txSignature: 'abc123'
+  },
+  {
+    id: '3', type: 'sent', token: 'SOL', amount: '1.2',
+    address: 'DRpbCBMxVnDK7maPM5tGv6MvB3v1sRMC86PZ8okm21hy',
+    label: 'Arjun SOL', timestamp: new Date(Date.now() - 1000 * 60 * 60 * 3),
+    status: 'confirmed'
+  },
+  {
+    id: '4', type: 'received', token: 'SOL', amount: '2.0',
+    address: 'HN7cABqLq46Es1jh92dQQisAq662SmxELLLsHHe4YWrH',
+    label: 'Merchant QR', timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24),
+    status: 'confirmed'
+  },
+  {
+    id: '5', type: 'sent', token: 'SKR', amount: '250',
+    address: 'So1ana111111111111111111111111111111111111111',
+    label: 'Seeker Team', timestamp: new Date(Date.now() - 1000 * 60 * 60 * 26),
+    status: 'failed'
+  },
+];
 
-      addToHistory: (address) =>
-        set((state) => ({
-          searchHistory: [
-            address,
-            ...state.searchHistory.filter((a) => a !== address),
-          ].slice(0, 20),
-        })),
+export const useWalletStore = create<WalletStore>((set) => ({
+  connected: false,
+  publicKey: null,
+  solBalance: 0,
+  skrBalance: 0,
+  solPriceUSD: 148.23,
+  transactions: MOCK_TXS,
+  contacts: MOCK_CONTACTS,
 
-      clearHistory: () => set({ searchHistory: [] }),
+  connect: (publicKey) => set({
+    connected: true,
+    publicKey,
+    solBalance: 2.0,
+    skrBalance: 500,
+  }),
 
-      toggleNetwork: () =>
-        set((state) => ({
-          isDevnet: !state.isDevnet,
-          isConnected: false,
-          publicKey: null,
-          balance: null,
-        })),
-    }),
-    {
-      name: "solanape-wallet-storage",
-      storage: createJSONStorage(() => AsyncStorage),
-      partialize: (state) => ({
-        lastBalance: state.lastBalance,
-        lastConnectedTime: state.lastConnectedTime,
-        isDevnet: state.isDevnet,
-        favorites: state.favorites,
-        searchHistory: state.searchHistory,
-      }),
-    }
-  )
-);
+  disconnect: () => set({
+    connected: false,
+    publicKey: null,
+    solBalance: 0,
+    skrBalance: 0,
+  }),
+
+  setSolBalance: (bal) => set({ solBalance: bal }),
+  setSkrBalance: (bal) => set({ skrBalance: bal }),
+
+  addTransaction: (tx) => set((state) => ({
+    transactions: [tx, ...state.transactions],
+  })),
+
+  updateTxStatus: (id, status) => set((state) => ({
+    transactions: state.transactions.map(tx =>
+      tx.id === id ? { ...tx, status } : tx
+    ),
+  })),
+}));
+
+export { MOCK_CONTACTS };

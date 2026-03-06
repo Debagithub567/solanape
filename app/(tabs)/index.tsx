@@ -1,521 +1,552 @@
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  ActivityIndicator,
+  View, Text, ScrollView, TouchableOpacity, StyleSheet,
+  Dimensions, StatusBar, RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import Animated, {
+  useSharedValue, useAnimatedStyle, withSpring, withTiming,
+  withRepeat, withSequence, interpolate, Extrapolation,
+  FadeIn, FadeInDown, SlideInRight,
+} from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
-import { useWallet } from '../../src/hooks/useWallet';
+import Svg, { Path, Circle, Defs, LinearGradient as SvgGradient, Stop, Rect } from 'react-native-svg';
+import { useWalletStore } from '../../../src/stores/wallet-store';
+import { Colors, Fonts, Spacing, Radius } from '../../constants/theme';
+import { shortenAddress, formatBalance, formatUSD, generateMockWallet, getSOLBalance } from '../../utils/solana';
+import { timeAgo } from '../../utils/solana';
 
-const C = {
-  bg: '#0D0D12',
-  card: '#1A1A24',
-  purple: '#7C3AED',
-  green: '#14F195',
-  skr: '#9945FF',
-  border: 'rgba(124,58,237,0.25)',
-  text: '#FFFFFF',
-  sub: '#AAAAAA',
-  muted: '#555555',
-};
+const { width: SW } = Dimensions.get('window');
 
-const recentTx = [
-  { id: '1', type: 'sent',     name: 'Alex',      amount: '0.05', time: '2 min ago' },
-  { id: '2', type: 'received', name: 'Luna',       amount: '0.10', time: '1 hr ago'  },
-  { id: '3', type: 'sent',     name: 'CoffeeShop', amount: '0.02', time: 'Yesterday' },
-];
+// ── Icons ──────────────────────────────────────────────
+const SendIcon = () => (
+  <Svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+    <Path d="M22 2L11 13" stroke={Colors.green} strokeWidth="2.2" strokeLinecap="round" />
+    <Path d="M22 2L15 22L11 13L2 9L22 2Z" stroke={Colors.green} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+  </Svg>
+);
 
-export default function Home() {
-  const router = useRouter();
-  const {
-    connected,
-    connecting,
-    connect,
-    disconnect,
-    publicKey,
-    balance,
-    lastBalance,
-    lastConnectedTime,
-  } = useWallet();
+const ReceiveIcon = () => (
+  <Svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+    <Path d="M12 3V15M12 15L8 11M12 15L16 11" stroke={Colors.purple} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    <Path d="M5 20H19" stroke={Colors.purple} strokeWidth="2.2" strokeLinecap="round" />
+  </Svg>
+);
 
-  const shortKey = publicKey
-    ? `${publicKey.toString().slice(0, 4)}...${publicKey.toString().slice(-4)}`
-    : '';
+const ScanIcon = () => (
+  <Svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+    <Path d="M3 7V5a2 2 0 012-2h2M17 3h2a2 2 0 012 2v2M21 17v2a2 2 0 01-2 2h-2M7 21H5a2 2 0 01-2-2v-2" stroke={Colors.blue} strokeWidth="2.2" strokeLinecap="round" />
+    <Rect x="7" y="7" width="10" height="10" rx="1" stroke={Colors.blue} strokeWidth="2" />
+  </Svg>
+);
 
-  const handleConnect = async () => {
-    try {
-      await connect();
-    } catch (e) {
-      console.log('Connection cancelled');
+const HistoryIcon = () => (
+  <Svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+    <Circle cx="12" cy="12" r="9" stroke={Colors.skrGold} strokeWidth="2" />
+    <Path d="M12 7V12L15 15" stroke={Colors.skrGold} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+  </Svg>
+);
+
+// ── Animated Balance Card ──────────────────────────────
+function BalanceHero() {
+  const { connected, publicKey, solBalance, skrBalance, solPriceUSD, connect, disconnect } = useWalletStore();
+  const [refreshing, setRefreshing] = useState(false);
+
+  const pulse = useSharedValue(1);
+  const shimmer = useSharedValue(0);
+  const cardScale = useSharedValue(0.95);
+  const cardOpacity = useSharedValue(0);
+
+  useEffect(() => {
+    cardScale.value = withSpring(1, { damping: 14 });
+    cardOpacity.value = withTiming(1, { duration: 500 });
+    shimmer.value = withRepeat(withTiming(1, { duration: 2200 }), -1, false);
+    if (connected) {
+      pulse.value = withRepeat(
+        withSequence(withTiming(1.04, { duration: 900 }), withTiming(1, { duration: 900 })),
+        -1, true
+      );
     }
+  }, [connected]);
+
+  const cardStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: cardScale.value }],
+    opacity: cardOpacity.value,
+  }));
+
+  const pulseStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: pulse.value }],
+  }));
+
+  const shimmerStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: interpolate(shimmer.value, [0, 1], [-SW, SW], Extrapolation.CLAMP) }],
+  }));
+
+  const handleConnect = () => {
+    const wallet = generateMockWallet();
+    connect(wallet.publicKey);
   };
 
+  const totalUSD = (solBalance * solPriceUSD).toFixed(2);
+
   return (
-    <SafeAreaView style={s.safe}>
-      <ScrollView showsVerticalScrollIndicator={false}>
+    <Animated.View style={[styles.heroCard, cardStyle]}>
+      {/* Shimmer overlay */}
+      <Animated.View style={[styles.shimmer, shimmerStyle]} />
 
-        {/* HEADER */}
-        <View style={s.header}>
-          <View style={s.logoRow}>
-            <View style={s.logoBox}>
-              <Text style={s.logoText}>SP</Text>
-            </View>
-            <Text style={s.appName}>SolanaPe</Text>
-          </View>
+      {/* Background mesh */}
+      <View style={styles.heroMesh}>
+        <View style={[styles.meshBlob, { backgroundColor: Colors.green, top: -30, right: -20 }]} />
+        <View style={[styles.meshBlob, { backgroundColor: Colors.purple, bottom: -20, left: -10 }]} />
+      </View>
 
-          {connected ? (
-            <TouchableOpacity style={s.connectedBtn} onPress={disconnect}>
-              <View style={s.greenDot} />
-              <Text style={s.connectedText}>{shortKey}</Text>
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              style={s.connectBtn}
-              onPress={handleConnect}
-              disabled={connecting}
-            >
-              {connecting ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Ionicons name="wallet-outline" size={15} color="#fff" />
-              )}
-              <Text style={s.connectBtnText}>
-                {connecting ? 'Connecting...' : 'Connect'}
-              </Text>
-            </TouchableOpacity>
+      {/* Top row */}
+      <View style={styles.heroTop}>
+        <View>
+          <Text style={styles.heroLabel}>
+            {connected ? 'Total Portfolio' : 'Solanape Wallet'}
+          </Text>
+          {connected && (
+            <Text style={styles.heroAddress}>{shortenAddress(publicKey!, 6)}</Text>
           )}
         </View>
+        <TouchableOpacity
+          style={[styles.connectBtn, connected && styles.connectBtnActive]}
+          onPress={connected ? disconnect : handleConnect}
+          activeOpacity={0.8}
+        >
+          <View style={[styles.connectDot, { backgroundColor: connected ? Colors.green : Colors.error }]} />
+          <Text style={[styles.connectText, connected && { color: Colors.green }]}>
+            {connected ? 'Connected' : 'Connect'}
+          </Text>
+        </TouchableOpacity>
+      </View>
 
-        {/* BALANCE CARD */}
-        {connected ? (
-          <View style={s.balanceCard}>
-            <Text style={s.balanceLabel}>TOTAL BALANCE</Text>
-            <Text style={s.balanceAmount}>
-              {balance !== null ? balance.toFixed(4) : '...'}
-              <Text style={s.balanceSOL}> SOL</Text>
+      {connected ? (
+        <>
+          {/* SOL Balance — primary */}
+          <Animated.View style={pulseStyle}>
+            <Text style={styles.balancePrimary}>
+              {formatBalance(solBalance, 4)}
+              <Text style={styles.balanceSymbol}> SOL</Text>
             </Text>
-            <Text style={s.balanceUSD}>
-              ≈ ₹{balance !== null
-                ? (balance * 13000).toLocaleString('en-IN', { maximumFractionDigits: 0 })
-                : '0'}
-            </Text>
-            <View style={s.balancePills}>
-              <View style={s.pill}>
-                <View style={[s.pillDot, { backgroundColor: C.green }]} />
-                <Text style={s.pillText}>Connected</Text>
-              </View>
-              <TouchableOpacity style={s.pill} onPress={disconnect}>
-                <Ionicons name="log-out-outline" size={12} color={C.sub} />
-                <Text style={s.pillText}>Disconnect</Text>
-              </TouchableOpacity>
+            <Text style={styles.balanceUSD}>≈ ${totalUSD} USD</Text>
+          </Animated.View>
+
+          {/* SKR Balance — secondary badge */}
+          <View style={styles.skrRow}>
+            <View style={styles.skrBadge}>
+              <View style={styles.skrDot} />
+              <Text style={styles.skrAmount}>{formatBalance(skrBalance, 0)} SKR</Text>
+              <Text style={styles.skrLabel}>Seeker Token</Text>
+            </View>
+            <View style={styles.networkBadge}>
+              <View style={[styles.connectDot, { backgroundColor: '#FFB800', width: 5, height: 5 }]} />
+              <Text style={styles.networkText}>Devnet</Text>
             </View>
           </View>
-        ) : (
-          <View style={s.disconnectedCard}>
-            {lastBalance !== null ? (
-              <>
-                <Text style={s.balanceLabel}>LAST BALANCE</Text>
-                <Text style={s.lastBalanceAmount}>
-                  {lastBalance.toFixed(4)}
-                  <Text style={s.lastBalanceSOL}> SOL</Text>
-                </Text>
-                <Text style={s.lastConnectedText}>
-                  Last connected at {lastConnectedTime}
-                </Text>
-                <TouchableOpacity
-                  style={s.connectBtnLarge}
-                  onPress={handleConnect}
-                  disabled={connecting}
-                >
-                  {connecting ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <Ionicons name="wallet-outline" size={20} color="#fff" />
-                  )}
-                  <Text style={s.connectBtnLargeText}>
-                    {connecting ? 'Connecting...' : 'Reconnect Wallet'}
-                  </Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              <>
-                <Ionicons name="wallet-outline" size={52} color={C.purple} />
-                <Text style={s.notConnectedTitle}>Connect Your Wallet</Text>
-                <Text style={s.notConnectedSub}>
-                  Tap below to connect Phantom and see your SOL balance
-                </Text>
-                <TouchableOpacity
-                  style={s.connectBtnLarge}
-                  onPress={handleConnect}
-                  disabled={connecting}
-                >
-                  {connecting ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <Ionicons name="wallet-outline" size={20} color="#fff" />
-                  )}
-                  <Text style={s.connectBtnLargeText}>
-                    {connecting ? 'Connecting...' : 'Connect Wallet'}
-                  </Text>
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-        )}
-
-        {/* QUICK ACTIONS */}
-        <View style={s.actionsRow}>
-          {[
-            {
-              icon: 'arrow-up-circle-outline',
-              label: 'Send',
-              color: C.purple,
-              route: '/send',
-            },
-            {
-              icon: 'arrow-down-circle-outline',
-              label: 'Receive',
-              color: C.green,
-              route: '/receive',
-            },
-            {
-              icon: 'scan-outline',
-              label: 'Scan',
-              color: '#F59E0B',
-              route: '/(tabs)/scan',
-            },
-            {
-              icon: 'time-outline',
-              label: 'History',
-              color: C.skr,
-              route: '/(tabs)/history',
-            },
-          ].map((item) => (
-            <TouchableOpacity
-              key={item.label}
-              style={s.actionItem}
-              onPress={() => router.push(item.route as any)}
-            >
-              <View style={[s.actionIcon, { backgroundColor: item.color + '22' }]}>
-                <Ionicons name={item.icon as any} size={26} color={item.color} />
-              </View>
-              <Text style={s.actionLabel}>{item.label}</Text>
-            </TouchableOpacity>
-          ))}
+        </>
+      ) : (
+        <View style={styles.disconnectedContent}>
+          <Text style={styles.disconnectedText}>Connect wallet to view balance</Text>
+          <TouchableOpacity style={styles.connectLargBtn} onPress={handleConnect} activeOpacity={0.85}>
+            <Text style={styles.connectLargText}>Connect Wallet →</Text>
+          </TouchableOpacity>
         </View>
-
-        {/* RECENT ACTIVITY */}
-        <View style={s.section}>
-          <View style={s.sectionHeader}>
-            <Text style={s.sectionTitle}>Recent Activity</Text>
-            <TouchableOpacity
-              onPress={() => router.push('/(tabs)/history' as any)}
-            >
-              <Text style={s.seeAll}>See all</Text>
-            </TouchableOpacity>
-          </View>
-
-          {recentTx.map((tx) => (
-            <View key={tx.id} style={s.txRow}>
-              <View
-                style={[
-                  s.txIcon,
-                  {
-                    backgroundColor:
-                      tx.type === 'sent'
-                        ? 'rgba(124,58,237,0.15)'
-                        : 'rgba(20,241,149,0.15)',
-                  },
-                ]}
-              >
-                <Ionicons
-                  name={
-                    tx.type === 'sent'
-                      ? 'arrow-up-outline'
-                      : 'arrow-down-outline'
-                  }
-                  size={20}
-                  color={tx.type === 'sent' ? C.purple : C.green}
-                />
-              </View>
-              <View style={s.txInfo}>
-                <Text style={s.txName}>{tx.name}</Text>
-                <Text style={s.txTime}>{tx.time}</Text>
-              </View>
-              <Text
-                style={[
-                  s.txAmount,
-                  { color: tx.type === 'sent' ? C.sub : C.green },
-                ]}
-              >
-                {tx.type === 'sent' ? '-' : '+'}
-                {tx.amount} SOL
-              </Text>
-            </View>
-          ))}
-        </View>
-
-        <View style={{ height: 100 }} />
-      </ScrollView>
-    </SafeAreaView>
+      )}
+    </Animated.View>
   );
 }
 
-const s = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: C.bg,
-  },
+// ── Quick Action Button ────────────────────────────────
+function QuickAction({ icon, label, onPress, delay = 0 }: {
+  icon: React.ReactNode; label: string; onPress: () => void; delay?: number;
+}) {
+  const scale = useSharedValue(0.8);
+  const opacity = useSharedValue(0);
+
+  useEffect(() => {
+    scale.value = withSpring(1, { damping: 12, stiffness: 120, mass: 0.8 });
+    opacity.value = withTiming(1, { duration: 400 });
+  }, []);
+
+  const handlePress = () => {
+    scale.value = withSpring(0.9, {}, () => { scale.value = withSpring(1); });
+    onPress();
+  };
+
+  const animStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+    opacity: opacity.value,
+  }));
+
+  return (
+    <TouchableOpacity onPress={handlePress} activeOpacity={0.8} style={styles.quickAction}>
+      <Animated.View style={animStyle}>
+        <View style={styles.quickActionIcon}>{icon}</View>
+        <Text style={styles.quickActionLabel}>{label}</Text>
+      </Animated.View>
+    </TouchableOpacity>
+  );
+}
+
+// ── Transaction Row ────────────────────────────────────
+function TxRow({ tx, index }: { tx: any; index: number }) {
+  const translateX = useSharedValue(40);
+  const opacity = useSharedValue(0);
+
+  useEffect(() => {
+    translateX.value = withSpring(0, { damping: 14, stiffness: 100 });
+    opacity.value = withTiming(1, { duration: 350 });
+  }, []);
+
+  const animStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: translateX.value }],
+    opacity: opacity.value,
+  }));
+
+  const isSent = tx.type === 'sent';
+  const isSKR = tx.token === 'SKR';
+
+  return (
+    <Animated.View style={animStyle}>
+      <TouchableOpacity style={styles.txRow} activeOpacity={0.7}>
+        <View style={[styles.txIcon, { backgroundColor: isSent ? 'rgba(255,77,109,0.1)' : 'rgba(20,241,149,0.1)' }]}>
+          <Text style={{ fontSize: 18 }}>
+            {isSent ? '↑' : '↓'}
+          </Text>
+        </View>
+        <View style={styles.txInfo}>
+          <Text style={styles.txLabel}>{tx.label || shortenAddress(tx.address)}</Text>
+          <Text style={styles.txTime}>{timeAgo(tx.timestamp)}</Text>
+        </View>
+        <View style={styles.txRight}>
+          <Text style={[styles.txAmount, { color: isSent ? Colors.error : Colors.green }]}>
+            {isSent ? '-' : '+'}{tx.amount} {tx.token}
+          </Text>
+          <View style={[styles.txStatus, {
+            backgroundColor: tx.status === 'confirmed' ? 'rgba(20,241,149,0.1)' :
+              tx.status === 'failed' ? 'rgba(255,77,109,0.1)' : 'rgba(255,215,0,0.1)'
+          }]}>
+            <Text style={[styles.txStatusText, {
+              color: tx.status === 'confirmed' ? Colors.green :
+                tx.status === 'failed' ? Colors.error : Colors.pending
+            }]}>
+              {tx.status}
+            </Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+}
+
+// ── Main Home Screen ───────────────────────────────────
+export default function HomeScreen() {
+  const router = useRouter();
+  const { transactions, connected } = useWalletStore();
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await new Promise(r => setTimeout(r, 1200));
+    setRefreshing(false);
+  };
+
+  const recentTxs = transactions.slice(0, 4);
+
+  return (
+    <View style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor={Colors.bg} />
+      <SafeAreaView style={{ flex: 1 }} edges={['top']}>
+        {/* Header */}
+        <Animated.View entering={FadeIn.duration(400)} style={styles.header}>
+          <View>
+            <Text style={styles.headerTitle}>Solanape 🐒</Text>
+            <Text style={styles.headerSub}>UPI-style Solana payments</Text>
+          </View>
+          <TouchableOpacity style={styles.headerBtn} activeOpacity={0.8}>
+            <Text style={{ fontSize: 18 }}>🔔</Text>
+          </TouchableOpacity>
+        </Animated.View>
+
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.scroll}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={Colors.green}
+            />
+          }
+        >
+          {/* Balance Hero */}
+          <BalanceHero />
+
+          {/* Quick Actions — like PhonePe's Money Transfers */}
+          <Animated.View entering={FadeInDown.delay(200).duration(400)} style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Quick Actions</Text>
+              {connected && (
+                <TouchableOpacity>
+                  <Text style={styles.sectionLink}>Airdrop SOL →</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            <View style={styles.quickGrid}>
+              <QuickAction
+                icon={<SendIcon />}
+                label="Send"
+                onPress={() => router.push('/send')}
+                delay={0}
+              />
+              <QuickAction
+                icon={<ReceiveIcon />}
+                label="Receive"
+                onPress={() => router.push('/receive')}
+                delay={80}
+              />
+              <QuickAction
+                icon={<ScanIcon />}
+                label="Scan QR"
+                onPress={() => router.push('/(tabs)/scan')}
+                delay={160}
+              />
+              <QuickAction
+                icon={<HistoryIcon />}
+                label="History"
+                onPress={() => router.push('/(tabs)/history')}
+                delay={240}
+              />
+            </View>
+          </Animated.View>
+
+          {/* SKR Highlight Banner */}
+          <Animated.View entering={FadeInDown.delay(300).duration(400)}>
+            <TouchableOpacity style={styles.skrBanner} activeOpacity={0.85}>
+              <View style={styles.skrBannerLeft}>
+                <Text style={styles.skrBannerEmoji}>🔮</Text>
+                <View>
+                  <Text style={styles.skrBannerTitle}>Send SKR to Seeker users</Text>
+                  <Text style={styles.skrBannerSub}>Native Seeker ecosystem token</Text>
+                </View>
+              </View>
+              <Text style={styles.skrBannerArrow}>→</Text>
+            </TouchableOpacity>
+          </Animated.View>
+
+          {/* Recent Transactions */}
+          <Animated.View entering={FadeInDown.delay(400).duration(400)} style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Recent Transactions</Text>
+              <TouchableOpacity onPress={() => router.push('/(tabs)/history')}>
+                <Text style={styles.sectionLink}>See all →</Text>
+              </TouchableOpacity>
+            </View>
+            {recentTxs.length > 0 ? (
+              recentTxs.map((tx, i) => (
+                <TxRow key={tx.id} tx={tx} index={i} />
+              ))
+            ) : (
+              <View style={styles.emptyTx}>
+                <Text style={styles.emptyTxText}>No transactions yet</Text>
+                <Text style={styles.emptyTxSub}>Send or receive SOL to get started</Text>
+              </View>
+            )}
+          </Animated.View>
+
+          <View style={{ height: 90 }} />
+        </ScrollView>
+      </SafeAreaView>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: Colors.bg },
+  scroll: { paddingHorizontal: Spacing.screen },
+
+  // Header
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 8,
+    paddingHorizontal: Spacing.screen,
+    paddingVertical: 12,
   },
-  logoRow: {
+  headerTitle: { fontSize: 22, fontWeight: '700', color: Colors.textPrimary },
+  headerSub: { fontSize: 11, color: Colors.textMuted, marginTop: 1 },
+  headerBtn: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: Colors.bgCard,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: Colors.border,
+  },
+
+  // Hero Card
+  heroCard: {
+    backgroundColor: Colors.bgElevated,
+    borderRadius: Radius.xxl,
+    padding: 24,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: Colors.greenBorder,
+    overflow: 'hidden',
+    minHeight: 180,
+  },
+  heroMesh: { ...StyleSheet.absoluteFillObject, overflow: 'hidden' },
+  meshBlob: {
+    position: 'absolute',
+    width: 120, height: 120,
+    borderRadius: 60,
+    opacity: 0.08,
+  },
+  shimmer: {
+    position: 'absolute',
+    top: 0, bottom: 0, width: 60,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    transform: [{ skewX: '-20deg' }],
+    zIndex: 1,
+  },
+  heroTop: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 16,
+    zIndex: 2,
   },
-  logoBox: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    backgroundColor: C.purple,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  logoText: {
-    color: '#fff',
-    fontWeight: 'bold',
-    fontSize: 13,
-  },
-  appName: {
-    color: C.text,
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
+  heroLabel: { fontSize: 12, color: Colors.textMuted, fontWeight: '500', textTransform: 'uppercase', letterSpacing: 0.8 },
+  heroAddress: { fontSize: 11, color: Colors.textSecondary, marginTop: 2, fontFamily: 'monospace' },
+
   connectBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: C.purple,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-  },
-  connectBtnText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  connectedBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: 'rgba(20,241,149,0.15)',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
+    gap: 5,
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderRadius: Radius.full,
+    backgroundColor: 'rgba(255,77,109,0.1)',
     borderWidth: 1,
-    borderColor: 'rgba(20,241,149,0.3)',
+    borderColor: 'rgba(255,77,109,0.25)',
   },
-  greenDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: C.green,
+  connectBtnActive: {
+    backgroundColor: Colors.greenDim,
+    borderColor: Colors.greenBorder,
   },
-  connectedText: {
-    color: C.green,
-    fontSize: 13,
-    fontWeight: '600',
+  connectDot: { width: 6, height: 6, borderRadius: 3 },
+  connectText: { fontSize: 12, fontWeight: '600', color: Colors.error },
+
+  balancePrimary: {
+    fontSize: 42, fontWeight: '800',
+    color: Colors.textPrimary,
+    letterSpacing: -1.5, zIndex: 2,
   },
-  balanceCard: {
-    marginHorizontal: 20,
-    marginVertical: 16,
-    backgroundColor: C.card,
-    borderRadius: 24,
-    padding: 28,
-    borderWidth: 1,
-    borderColor: C.border,
-    alignItems: 'center',
-  },
-  balanceLabel: {
-    color: C.sub,
-    fontSize: 12,
-    letterSpacing: 2,
-    textTransform: 'uppercase',
-    marginBottom: 12,
-  },
-  balanceAmount: {
-    color: C.text,
-    fontSize: 48,
-    fontWeight: 'bold',
-    letterSpacing: -1,
-  },
-  balanceSOL: {
-    color: C.green,
-    fontSize: 24,
-  },
-  balanceUSD: {
-    color: C.sub,
-    fontSize: 16,
-    marginTop: 4,
-    marginBottom: 16,
-  },
-  balancePills: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  pill: {
+  balanceSymbol: { fontSize: 22, fontWeight: '600', color: Colors.green },
+  balanceUSD: { fontSize: 14, color: Colors.textSecondary, marginTop: 4, zIndex: 2 },
+
+  skrRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#0D0D12',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: C.border,
+    justifyContent: 'space-between',
+    marginTop: 14,
+    zIndex: 2,
   },
-  pillDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
+  skrBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: Colors.skrGoldDim,
+    borderWidth: 1, borderColor: Colors.skrGoldBorder,
+    paddingHorizontal: 10, paddingVertical: 5,
+    borderRadius: Radius.full,
   },
-  pillText: {
-    color: C.sub,
-    fontSize: 12,
+  skrDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.skrGold },
+  skrAmount: { fontSize: 13, fontWeight: '700', color: Colors.skrGold },
+  skrLabel: { fontSize: 11, color: 'rgba(255,184,0,0.6)', marginLeft: 2 },
+  networkBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: 'rgba(255,184,0,0.08)',
+    borderWidth: 1, borderColor: 'rgba(255,184,0,0.2)',
+    paddingHorizontal: 8, paddingVertical: 4,
+    borderRadius: Radius.full,
   },
-  disconnectedCard: {
-    marginHorizontal: 20,
-    marginVertical: 16,
-    backgroundColor: C.card,
-    borderRadius: 24,
-    padding: 28,
-    borderWidth: 1,
-    borderColor: C.border,
-    alignItems: 'center',
-    gap: 12,
+  networkText: { fontSize: 11, color: Colors.skrGold, fontWeight: '600' },
+
+  disconnectedContent: { alignItems: 'center', paddingVertical: 8 },
+  disconnectedText: { color: Colors.textSecondary, fontSize: 14, marginBottom: 14 },
+  connectLargBtn: {
+    backgroundColor: Colors.green,
+    paddingHorizontal: 24, paddingVertical: 10,
+    borderRadius: Radius.full,
   },
-  lastBalanceAmount: {
-    color: C.muted,
-    fontSize: 48,
-    fontWeight: 'bold',
-    letterSpacing: -1,
-  },
-  lastBalanceSOL: {
-    color: C.muted,
-    fontSize: 24,
-  },
-  lastConnectedText: {
-    color: C.muted,
-    fontSize: 13,
-  },
-  notConnectedTitle: {
-    color: C.text,
-    fontSize: 22,
-    fontWeight: 'bold',
-  },
-  notConnectedSub: {
-    color: C.sub,
-    fontSize: 14,
-    textAlign: 'center',
-    lineHeight: 22,
-  },
-  connectBtnLarge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: C.purple,
-    paddingHorizontal: 28,
-    paddingVertical: 14,
-    borderRadius: 16,
-    marginTop: 8,
-  },
-  connectBtnLargeText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  actionsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingHorizontal: 20,
-    marginVertical: 8,
-  },
-  actionItem: {
-    alignItems: 'center',
-    gap: 8,
-  },
-  actionIcon: {
-    width: 58,
-    height: 58,
-    borderRadius: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  actionLabel: {
-    color: C.sub,
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  section: {
-    paddingHorizontal: 20,
-    marginTop: 24,
-  },
+  connectLargText: { color: Colors.bg, fontWeight: '700', fontSize: 14 },
+
+  // Section
+  section: { marginBottom: 24 },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 14,
   },
-  sectionTitle: {
-    color: C.text,
-    fontSize: 18,
-    fontWeight: '700',
+  sectionTitle: { fontSize: 16, fontWeight: '700', color: Colors.textPrimary },
+  sectionLink: { fontSize: 13, color: Colors.green, fontWeight: '600' },
+
+  // Quick Actions
+  quickGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
   },
-  seeAll: {
-    color: C.purple,
-    fontSize: 14,
+  quickAction: { flex: 1, alignItems: 'center' },
+  quickActionIcon: {
+    width: 64, height: 64,
+    borderRadius: Radius.xl,
+    backgroundColor: Colors.bgCard,
+    borderWidth: 1, borderColor: Colors.border,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: 6,
   },
+  quickActionLabel: { fontSize: 11, color: Colors.textSecondary, fontWeight: '600', textAlign: 'center' },
+
+  // SKR Banner
+  skrBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.bgCard,
+    borderRadius: Radius.lg,
+    padding: 16,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: Colors.skrGoldBorder,
+  },
+  skrBannerLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  skrBannerEmoji: { fontSize: 28 },
+  skrBannerTitle: { fontSize: 14, fontWeight: '700', color: Colors.textPrimary },
+  skrBannerSub: { fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
+  skrBannerArrow: { fontSize: 18, color: Colors.skrGold, fontWeight: '700' },
+
+  // Transactions
   txRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 14,
+    paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.05)',
-    gap: 14,
+    borderBottomColor: Colors.border,
+    gap: 12,
   },
   txIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    justifyContent: 'center',
-    alignItems: 'center',
+    width: 42, height: 42, borderRadius: 21,
+    alignItems: 'center', justifyContent: 'center',
   },
-  txInfo: {
-    flex: 1,
-  },
-  txName: {
-    color: C.text,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  txTime: {
-    color: C.muted,
-    fontSize: 12,
-    marginTop: 2,
-  },
-  txAmount: {
-    fontSize: 15,
-    fontWeight: '700',
-  },
+  txInfo: { flex: 1 },
+  txLabel: { fontSize: 14, fontWeight: '600', color: Colors.textPrimary },
+  txTime: { fontSize: 11, color: Colors.textMuted, marginTop: 2 },
+  txRight: { alignItems: 'flex-end', gap: 4 },
+  txAmount: { fontSize: 14, fontWeight: '700' },
+  txStatus: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
+  txStatusText: { fontSize: 10, fontWeight: '600', textTransform: 'capitalize' },
+
+  emptyTx: { alignItems: 'center', paddingVertical: 32 },
+  emptyTxText: { fontSize: 15, color: Colors.textSecondary, fontWeight: '600' },
+  emptyTxSub: { fontSize: 12, color: Colors.textMuted, marginTop: 4 },
 });
